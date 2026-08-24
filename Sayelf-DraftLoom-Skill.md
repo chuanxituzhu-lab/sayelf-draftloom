@@ -1,0 +1,81 @@
+---
+name: sayelf-draftloom
+description: 公众号自动排版。将 Markdown/TXT 稿件自动排版为微信公众号文章：结构化编辑、图片插入、实时预览、去 AI 味、导出微信兼容 HTML。当用户提到 公众号排版、微信文章排版、公众号文章编辑、草稿生成 或 导出微信 HTML 时使用此技能。
+agent_created: true
+---
+
+# 公众号自动排版（sayelf-draftloom）
+
+基于 draftloom（本地优先、零第三方依赖的公众号排版工具，MVP v0.1）实现文字稿件到微信文章的自动排版。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。
+
+## 安装（WorkBuddy）
+
+```bash
+git clone https://github.com/chuanxituzhu-lab/sayelf-draftloom.git ~/.workbuddy/skills/sayelf-draftloom
+```
+
+无需安装第三方依赖，仅需 Node.js。校验安装：在技能目录运行 `npm test`（应 17 个测试全部通过）。
+
+## 何时使用
+
+- 用户要求排版微信公众号文章、美化公众号稿件
+- 导入 Markdown/TXT 与图片，生成公众号文章
+- 导出微信兼容 HTML 或生成本地交付包
+- 去除文本 AI 味、切换文章主题
+
+## 使用方式
+
+以下命令均在技能目录（仓库根目录）运行。
+
+### CLI（推荐 Agent 调用）
+
+```bash
+npm run cli -- init                                # 初始化文档
+npm run cli -- import --article article.md --images ./images   # 导入稿件+图片
+npm run cli -- import --text "文章内容" --image ./cover.png
+npm run cli -- guidance                            # 自动排版指导
+npm run cli -- text --text "标题：新的文章标题"      # 中文自然语言指令
+npm run cli -- humanize --mode natural             # 去 AI 味（natural/conservative）
+npm run cli -- export --out article.html           # 导出微信兼容 HTML
+npm run cli -- publish --out .local-data/publish/latest  # 生成本地交付包
+```
+
+状态默认写入 `.local-data/document.json`，可用 `WECHAT_LAYOUT_DATA` 指定路径。
+
+### GUI 可视化编辑
+
+```bash
+npm start   # 浏览器打开 http://127.0.0.1:4173
+```
+
+页面提供左右分栏编辑与微信实时预览，支持 Markdown/TXT + 多图片拖放导入。
+
+### MCP
+
+`npm run mcp` 启动 JSON-RPC stdio 服务，提供 `publishing_import`、`publishing_guidance`、`publishing_state`、`publishing_apply_text`、`publishing_humanize`、`publishing_apply_intent`、`publishing_export`、`publishing_publish` 工具。
+
+## 中文自然语言指令示例
+
+```text
+标题：AI 时代的个人工作台
+副标题：从工具堆叠走向统一运行时
+添加标题：为什么需要统一排版层
+添加段落：这是正文内容
+添加引用：工具应该服务内容，而不是反过来。
+第 3 段改成标题：关键结论
+把当前改成引用
+拆分当前段落
+插入图片：cover
+添加表格：指标|结果\n阅读量|1000
+添加 CTA：继续阅读|打开文章|https://example.com
+主题：杂志        （可选：极简 / 杂志 / 清新）
+去 AI 味：自然
+上移当前 / 下移当前 / 删除当前
+```
+
+## 核心规则
+
+- Document State 是唯一内容事实源；所有内容变更经由 Intent → Reducer → VersionStore，自动写入 `revision + updatedAt`。
+- 缩放等视图状态不得写入 Document State。
+- 最多 50 个编辑版本，支持 Undo/Redo。
+- `publish` 默认只生成本地交付包，不上传。仅当显式配置 `WECHAT_ACCESS_TOKEN`（或 `WECHAT_APP_ID` + `WECHAT_APP_SECRET`）后才提交远程草稿；Token 不写入文档或输出。
