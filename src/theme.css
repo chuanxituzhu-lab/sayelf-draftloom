@@ -1,0 +1,30 @@
+/* 工作区级主题变量：主题选择会同时改变编辑器、素材栏、工具栏和预览舞台。 */
+.shell{--theme-bg:#eef3f7;--theme-panel:#fff;--theme-stage:#e9edf1;--theme-line:#dfe7ee;--theme-ink:#17212b;--theme-accent:#07c160;--theme-soft:#f5f7f8;background:var(--theme-bg);color:var(--theme-ink);transition:background .2s ease,color .2s ease}
+.shell.theme-minimal{--theme-bg:#eef3f7;--theme-panel:#fff;--theme-stage:#e9edf1;--theme-line:#dfe7ee;--theme-ink:#17212b;--theme-accent:#07c160;--theme-soft:#f5f7f8}
+.shell.theme-editorial{--theme-bg:#f3eee8;--theme-panel:#fffdf9;--theme-stage:#e9dfd5;--theme-line:#e3d5c8;--theme-ink:#3f3027;--theme-accent:#9a5b35;--theme-soft:#fbf4ec}
+.shell.theme-fresh{--theme-bg:#eaf5f5;--theme-panel:#fbffff;--theme-stage:#dceff0;--theme-line:#cfe3e4;--theme-ink:#21464b;--theme-accent:#218a9b;--theme-soft:#effafa}
+.shell.theme-ink{--theme-bg:#eceaf4;--theme-panel:#fbfaff;--theme-stage:#dedbea;--theme-line:#d4cdea;--theme-ink:#302745;--theme-accent:#7657b8;--theme-soft:#f2effb}
+.shell.theme-sunset{--theme-bg:#fff0e6;--theme-panel:#fffdfa;--theme-stage:#f7dfd0;--theme-line:#eed2c2;--theme-ink:#4a2a22;--theme-accent:#e45f3f;--theme-soft:#fff0e7}
+.shell .topbar,.shell .statusbar{background:var(--theme-panel);border-color:var(--theme-line)}
+.shell .panel{background:var(--theme-panel);border-color:var(--theme-line)}
+.shell .preview-toolbar{border-color:var(--theme-line)}
+.shell .phone-stage{background:var(--theme-stage)}
+.shell .command-box,.shell .import-drop{background:var(--theme-soft);border-color:color-mix(in srgb,var(--theme-accent) 32%,var(--theme-line));color:var(--theme-ink)}
+.shell .guidance-box,.shell .wechat-limits{background:var(--theme-panel);border-color:var(--theme-line)}
+.shell .button:hover,.shell button:hover{border-color:color-mix(in srgb,var(--theme-accent) 55%,var(--theme-line));background:var(--theme-soft)}
+.shell .primary-button,.shell .command-row button{background:var(--theme-accent);border-color:var(--theme-accent)}
+.shell .wechat-article{background:var(--theme-panel);color:var(--theme-ink);border-top:4px solid var(--theme-accent);transition:background .2s ease,color .2s ease,border-color .2s ease}
+.shell .wechat-article h2{border-left-color:var(--theme-accent)}
+.shell .wechat-article .cta a{background:var(--theme-accent)}
+.shell .wechat-article blockquote,.shell .wechat-article .cta,.shell .wechat-article .media{background:var(--theme-soft)}
+.shell .wechat-cover{position:relative;overflow:hidden;margin:-28px -22px 20px;min-height:112px;border-radius:0 0 8px 8px;background:var(--theme-soft)}
+.shell .wechat-cover:not(.wechat-cover-placeholder) img{display:block;width:100%;aspect-ratio:900 / 383;object-fit:cover}
+.shell .wechat-cover-copy{display:grid;gap:2px;padding:8px 12px;background:var(--theme-soft);text-align:left}
+.shell .wechat-cover-copy strong{font-size:16px;line-height:1.35;color:var(--theme-ink)}
+.shell .wechat-cover-copy span{font-size:12px;line-height:1.45;color:#75808b}
+.shell .wechat-cover-generated .wechat-cover-copy{display:none}
+.shell .wechat-cover-placeholder{display:grid;place-items:center;padding:20px;color:var(--theme-accent);font-size:12px;border:1px dashed color-mix(in srgb,var(--theme-accent) 50%,var(--theme-line));text-align:center}
+.shell .wechat-summary{display:grid;gap:3px;margin:10px 0 22px;padding:10px 12px;background:var(--theme-soft);border-radius:7px;font-size:13px;line-height:1.65;color:#5f6d7b}
+.shell .summary-label{font-size:11px;font-weight:700;color:var(--theme-accent)}
+.check-button{border-color:color-mix(in srgb,var(--theme-accent) 55%,var(--theme-line));color:var(--theme-accent);font-weight:650}
+.wechat-check-note{margin:7px 0 0;font-size:10px;color:var(--theme-accent)}

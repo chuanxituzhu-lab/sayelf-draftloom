@@ -1,10 +1,9 @@
 {
   "name": "wechat-layout-harness",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "state_model": "single-document-source-of-truth",
   "view_state_excluded": ["previewZoom", "selection"],
-  "events": ["wechat-layout:changed"],
-  "methods": ["getState", "applyText", "applyIntent", "importArticle", "getLayoutGuidance", "addImage", "selectBlock", "undo", "redo"],
+  "events": ["wechat-layout:changed"],  "methods": ["getState", "applyText", "applyIntent", "importArticle", "getLayoutGuidance", "addImage", "selectBlock", "undo", "redo"],
   "supported_components": ["heading", "paragraph", "quote", "list", "table", "image", "cta", "gallery", "media"],
   "themes": ["minimal", "editorial", "fresh"],
   "humanizer_modes": ["natural", "conservative"],

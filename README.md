@@ -1,26 +1,38 @@
-# 公众号排版 MVP v0.1
+# 公众号排版 MVP v0.1.1
 
 本地优先、无第三方依赖的公众号文章可视化排版 MVP。
+
+版本号以 `package.json` 为唯一来源。运行 `npm run version:sync` 会同步界面徽标、MCP 服务版本、Harness 文档和 README；合并到 GitHub `main` 后，`.github/workflows/version-sync.yml` 会自动递增 patch 版本并提交回仓库。
 
 ## 已实现
 
 - 文字指令 → 文档状态 → GUI/预览同步
 - GUI 可视化直接编辑 → 文档状态 → 右侧预览同步
-- 微信文章实时预览，60%–140% 独立缩放；缩放不修改文档数据
-- 文章块新增 / 修改 / 删除 / 上下移动
+- 微信文章实时预览，60%–140% 独立缩放；缩放不修改文档数据- 文章块新增 / 修改 / 删除 / 上下移动
 - 本地图片素材库、点击插入文章
 - Markdown / TXT + 多图片拖放导入，自动识别标题、章节、段落、引用和图片引用
+- 内容驱动的智能视觉编排：自动提炼标题、生成标题图，并按章节语义匹配素材或生成本地创意 SVG 占位图
+- 封面一键设置：根据封面与内容摘要设置区，智能复用素材库中的合规封面，置为文章首图并同步摘要
+- 独立封面与摘要设置区：封面素材、900×383 头条比例、主/副文案和 ≤128 字摘要集中编辑，右侧预览按公众号顺序同步
+- 智能标题工作流：从全文生成摘要和 5 个证据绑定的爆款标题候选，自动采用第一候选，人工选择任一候选后即锁定标题
+- 跨文章本地素材库：导入的新图和自动生成创意图会自动入库；下一篇文章可按语义复用并自动填充，素材库容量 200 张
+- 图片智能导入：点击“图片智能导入”会读取图片文件名、alt/描述以及可选的 OCR/视觉标签，识别图片内容后与章节语义匹配，将素材库中尚未使用的图片一键放到文章相应位置，支持回滚
+- 主流程为“导入文章+图片 → 自动总结/配图/入库 → 人工编排 → 导出到微信草稿箱”；素材库可单独上传，也会接收导入与生成结果
 - 自动排版指导面板：提示长段落、缺少层级、未匹配图片，并可一键带入人工指令
+- PingPongGrowth 创作画像：按公众号定位、读者、语气和关键词分析文章，并生成标题/结构/CTA 建议
 - 自然语言指导编辑：区块转换、长段落拆分、按序号修改、组件创建
 - 本地 Humanizer：自然化 / 保守调整两种模式，原稿可回滚
 - 冻结语义组件：列表、表格、CTA、画廊、媒体，并支持 Markdown/指令创建
-- 三套 MVP 主题：极简、杂志、清新
+- 五套 MVP 主题：极简、杂志、清新、墨韵、暖阳；切换主题会同步改变工作区、编辑器和右侧预览
+- “一键检测”：按微信公众号字段、正文、封面和排版建议统一检查，先自动修正可安全修正项，再提示仍需人工处理的内容
+- “智能优化发布约束”：点击后自动蒸馏正文、同步标题/作者/摘要/封面主副文案，并按“封面 → 标题 → 作者/时间 → 内容摘要 → 正文”动态重排公众号预览；原稿始终保留
+- 封面辅助：按 900×383 / 383×383 规范生成 SVG 候选，检查比例与文件大小，最终由人工确认
 - 微信交付包：导出微信兼容 HTML、草稿 payload 和 manifest；配置接口后可提交远程草稿
 - Harness JS API，可由外部 Agent/自动化层调用
 - 时间戳 + revision 序列号版本机制
 - 最多 50 个编辑版本，支持 Undo / Redo
 - localStorage 本地持久化
-- JSON 导入 / 导出
+- 内部文档状态 JSON（供 CLI/MCP 与自动化交换；普通用户无需手动处理）
 - Node 原生测试，无第三方运行依赖
 
 ## 启动
@@ -32,53 +44,25 @@ npm start
 ```
 
 浏览器打开：`http://127.0.0.1:4173`
-
 CLI / MCP 接入：
 
 ```bash
 npm run cli -- import --article article.md --images ./images
 npm run cli -- import --text "文章内容" --image ./cover.png
 npm run cli -- guidance
+npm run cli -- cover --out .local-data/cover
+npm run cli -- cover-import --image ./assets/covers/draftloom-wechat-preview-cover.jpg --width 900 --height 383
+npm run cli -- visuals --max-generated 3
+npm run cli -- cover-set
+npm run cli -- viral-title
+npm run cli -- assets-fill
+npm run cli -- growth
+npm run cli -- growth-brief
+npm run cli -- wechat-check
+npm run cli -- wechat-optimize
 npm run cli -- text --text "标题：AI 时代的个人工作台"
 npm run cli -- humanize --mode natural
 npm run cli -- export --out article.html
 npm run cli -- publish --out .local-data/publish/latest
-npm run mcp
-```
-
-浏览器中可将 `.md` / `.txt` 与多张图片一起拖入“导入文章+图片”区域。Markdown 中的 `![说明](图片文件名)` 会自动匹配素材；未在原文引用的图片会追加到文末并提示人工确认。导入后可直接编辑标题、段落、图片顺序，或使用“自动排版指导”面板带入文字指令。
-
-常用文字指令包括：
-
-```text
-把当前改成引用
-第 3 段改成标题：关键结论
-拆分当前段落
-添加表格：指标|结果\n阅读量|1000
-添加 CTA：继续阅读|打开文章|https://example.com
-主题：杂志
-去 AI 味：自然
-```
-
-`publish` 默认只生成本地交付包，不会上传。接入微信公众号草稿时可设置 `WECHAT_ACCESS_TOKEN`，或设置 `WECHAT_APP_ID` + `WECHAT_APP_SECRET` 让 CLI 临时获取 Token；也可用 `WECHAT_DRAFT_API_URL` 指向自有适配层。配置凭据后，PNG/JPEG/GIF 图片会先上传为图文内图片，再提交草稿；Token 不写入文档或输出结果。
-
-## Harness API
-
-页面加载后暴露：
-
-```js
-window.wechatLayoutHarness.getState()
-window.wechatLayoutHarness.applyText('添加标题：第二部分')
-window.wechatLayoutHarness.applyIntent({ type: 'appendBlock', blockType: 'paragraph', text: '正文' })
-window.wechatLayoutHarness.addImage({ name: 'cover.png', dataUrl: 'data:image/png;base64,...' })
-window.wechatLayoutHarness.applyText('去 AI 味：自然')
-window.wechatLayoutHarness.applyText('主题：清新')
-window.wechatLayoutHarness.undo()
-window.wechatLayoutHarness.redo()
-```
-
-状态变化时触发浏览器事件：`wechat-layout:changed`。
-
-## 当前 MVP 边界
-
-没有云同步、账号系统、复杂样式市场或 DOCX 解析。微信交付已提供本地兼容包和可配置的远程草稿接口适配层；视频、音频和永久素材库管理仍保持在 MVP v0.1 边界之外。
+npm run cli -- draft-status
+npm run cli -- draft-submit --confirm true

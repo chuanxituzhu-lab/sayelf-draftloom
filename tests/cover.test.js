@@ -28,6 +28,7 @@ test('draftCoverCopy picks up number signal', () => {
 
 test('auditCoverImage accepts 900x383 and rejects wrong ratio', () => {
   assert.equal(auditCoverImage({ width: 900, height: 383, bytes: 500000 }).ok, true);
+  assert.equal(auditCoverImage({ width: 383, height: 383, bytes: 500000 }).ok, true);
   const bad = auditCoverImage({ width: 800, height: 600, bytes: 500000 });
   assert.equal(bad.ok, false);
   assert.ok(bad.issues.length >= 1);

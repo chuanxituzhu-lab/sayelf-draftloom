@@ -1,4 +1,5 @@
 // src/cover.js —— 公众号封面模块（零依赖、纯函数、可测）
+import { WECHAT_LIMITS, inspectWechatCover } from './wechat-limits.js';
 // 依据微信官方规范 + 爆款封面公开规则蒸馏，不调外部 AI，确定性生成。
 //
 // 尺寸规范（developers.weixin.qq.com 及 2025 运营规范核对）：
@@ -7,15 +8,7 @@
 //   宽度 ≤1280px 否则被压缩掉画质；文件 ≤10MB，建议 <1MB
 //   关键文字/logo 必须居中——两侧在缩略图场景会被裁掉
 
-export const COVER_SPEC = Object.freeze({
-  headline: { w: 900, h: 383, ratio: '2.35:1', use: '头条/推送/被推荐展示' },
-  square:   { w: 383, h: 383, ratio: '1:1',    use: '主页/转发朋友圈/聊天缩略图' },
-  maxWidthPx: 1280,
-  maxBytes: 10 * 1024 * 1024,
-  recommendMaxBytes: 1024 * 1024,
-  // 安全区：缩略图会裁到中央方形，核心文字须落在中央 383 宽的区域内
-  safeCenterWidth: 383
-});
+export const COVER_SPEC = Object.freeze({ ...WECHAT_LIMITS.titleImage });
 
 // ── 爆款文案规则引擎 ────────────────────────────────────────────
 // 四大公开公式（新榜/知乎/壹伴等交叉验证）：
@@ -47,25 +40,25 @@ export function draftCoverCopy({ title = '', body = '', formula = null } = {}) {
   const candidates = [];
 
   // 主文案：优先保留标题里的“钩子”，压到 ≤10 字
-  const core = clip(t.replace(/[《》「」【】]/g, '').split(/[，,。！!？?：:—-]/)[0], 10) || clip(t, 10);
+  const core = clip(t.replace(/[《》「」【】]/g, '').split(/[，,。！!？?：:—-]/)[0], WECHAT_LIMITS.titleImage.mainChars) || clip(t, WECHAT_LIMITS.titleImage.mainChars);
 
   const pick = formula && HEADLINE_FORMULAS.includes(formula) ? [formula] : HEADLINE_FORMULAS;
   for (const f of pick) {
     if (f === 'number' && sig.number) {
-      candidates.push({ formula: 'number', main: core, sub: clip(`${sig.number}个关键点${sig.audience ? '·' + sig.audience : ''}`, 14) });
+      candidates.push({ formula: 'number', main: core, sub: clip(`${sig.number}个关键点${sig.audience ? '·' + sig.audience : ''}`, WECHAT_LIMITS.titleImage.subChars) });
     } else if (f === 'painpoint') {
-      candidates.push({ formula: 'painpoint', main: core, sub: clip(sig.audience ? `${sig.audience}必看的解法` : '一次讲清怎么做', 14) });
+      candidates.push({ formula: 'painpoint', main: core, sub: clip(sig.audience ? `${sig.audience}必看的解法` : '一次讲清怎么做', WECHAT_LIMITS.titleImage.subChars) });
     } else if (f === 'counter') {
-      candidates.push({ formula: 'counter', main: core, sub: clip('可能你一直想错了', 14) });
+      candidates.push({ formula: 'counter', main: core, sub: clip('可能你一直想错了', WECHAT_LIMITS.titleImage.subChars) });
     } else if (f === 'suspense') {
-      candidates.push({ formula: 'suspense', main: core, sub: clip('看完你就懂了', 14) });
+      candidates.push({ formula: 'suspense', main: core, sub: clip('看完你就懂了', WECHAT_LIMITS.titleImage.subChars) });
     }
   }
   if (!candidates.length) candidates.push({ formula: 'plain', main: core, sub: '' });
 
   // 规则体检：给人工审核用的可操作提示，不自动改写
   const checks = [];
-  if ([...core].length > 10) checks.push('主文案超 10 字，封面上可能显示拥挤，建议再压缩');
+  if ([...core].length > WECHAT_LIMITS.titleImage.mainChars) checks.push(`主文案超 ${WECHAT_LIMITS.titleImage.mainChars} 字，封面上可能显示拥挤，建议再压缩`);
   if (!sig.number) checks.push('无数字：数字型封面点击率更高，可在正文提炼一个关键数字');
   if (!sig.hasDemandWord) checks.push('无“技巧/攻略/清单”等需求词，含之搜索与点击通常更好');
   if (!sig.audience) checks.push('未点明人群：加“职场/新手/运营”等精准人群更易触达');
@@ -103,14 +96,10 @@ export function renderCoverSvg({ main = '', sub = '', bg = '#0f172a', fg = '#fff
 // 尺寸/大小体检：对“用户自带的封面图”做规范校验，返回可操作结论
 // input: { width, height, bytes }
 export function auditCoverImage({ width = 0, height = 0, bytes = 0 } = {}) {
-  const issues = [];
   const ratio = width && height ? width / height : 0;
-  const near = (a, b) => Math.abs(a - b) < 0.03;
-  const isHeadline = near(ratio, 900 / 383);
-  const isSquare = near(ratio, 1);
-  if (!isHeadline && !isSquare) issues.push(`比例 ${ratio ? ratio.toFixed(2) : '未知'} 非 2.35:1 或 1:1，上传后会被裁剪，关键文字可能丢失`);
-  if (width > COVER_SPEC.maxWidthPx) issues.push(`宽 ${width}px 超 1280px，会被微信压缩掉画质，建议缩到 ≤1080px`);
-  if (bytes > COVER_SPEC.maxBytes) issues.push(`文件 ${(bytes / 1024 / 1024).toFixed(1)}MB 超 10MB 上限，必须压缩`);
-  else if (bytes > COVER_SPEC.recommendMaxBytes) issues.push(`文件 ${(bytes / 1024 / 1024).toFixed(2)}MB 偏大，建议压到 <1MB 提升加载速度`);
-  return { ratio: isHeadline ? '2.35:1' : isSquare ? '1:1' : 'nonstandard', ok: issues.length === 0, issues };
+  const kind = Math.abs(ratio - 1) < 0.03 ? 'square' : 'headline';
+  const validation = inspectWechatCover({ width, height, bytes, kind });
+  const issues = [...validation.errors, ...validation.warnings];
+  if (width > COVER_SPEC.maxWidthPx && !issues.some(item => item.includes('建议缩到'))) issues.push(`建议缩到 ≤1080px，避免微信压缩掉画质`);
+  return { ratio: validation.ratio, ok: issues.length === 0, issues, warnings: validation.warnings };
 }

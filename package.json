@@ -1,14 +1,18 @@
 {
   "name": "draftloom",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.1.1",  "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
+    "configure:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/configure-local.ps1",
+    "start:background": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-background.ps1",
+    "autostart:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-autostart.ps1",
+    "autostart:remove": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/remove-autostart.ps1",
     "dev": "node server.mjs",
     "cli": "node scripts/cli.mjs",
     "mcp": "node scripts/mcp.mjs",
+    "version:sync": "node scripts/sync-version.mjs",
     "test": "node --test",
-    "check": "node --check src/app.js && node --check src/core.js && node --check server.mjs"
+    "check": "node --check src/app.js && node --check src/core.js && node --check src/cover.js && node --check src/growth.js && node --check src/visuals.js && node --check src/wechat-limits.js && node --check src/version.js && node --check scripts/local-config.mjs && node --check scripts/sync-version.mjs && node --check scripts/cli.mjs && node --check scripts/mcp.mjs && node --check server.mjs"
   }
 }
