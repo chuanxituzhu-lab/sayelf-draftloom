@@ -4,6 +4,56 @@
 
 版本号以 `package.json` 为唯一来源。运行 `npm run version:sync` 会同步界面徽标、MCP 服务版本、Harness 文档和 README；合并到 GitHub `main` 后，`.github/workflows/version-sync.yml` 会自动递增 patch 版本并提交回仓库。
 
+## 安装与启动（首页入口）
+
+> 当前最新版已经合并到 `main`。请使用下面的命令，不要下载旧的 ZIP 快照。
+
+### 1. 安装 Node.js
+
+安装 Node.js 18 或更高版本（推荐 Node.js 20 LTS），安装完成后重新打开终端，并确认：
+
+```bash
+node --version
+npm --version
+```
+
+### 2. 下载最新版
+
+```bash
+git clone https://github.com/chuanxituzhu-lab/sayelf-draftloom.git
+cd sayelf-draftloom
+```
+
+旧地址 `https://github.com/chuanxituzhu-lab/draftloom` 会自动跳转到同一个仓库。
+
+### 3. 安装并启动
+
+```bash
+npm install
+npm start
+```
+
+看到以下提示即表示启动成功：
+
+```text
+WeChat Layout MVP: http://127.0.0.1:4173
+```
+
+然后在浏览器打开 [http://127.0.0.1:4173](http://127.0.0.1:4173)。如果 4173 端口被占用，可在 Windows PowerShell 中运行 `$env:PORT="4177"; npm start`，再打开 `http://127.0.0.1:4177`。
+
+### 已经下载过旧版本？
+
+在项目目录执行：
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+npm start
+```
+
+启动前可运行 `git log -1 --oneline`，应看到最新的合并提交，而不是旧版 `0.1.0`。
+
 ## 已实现
 
 - 文字指令 → 文档状态 → GUI/预览同步
