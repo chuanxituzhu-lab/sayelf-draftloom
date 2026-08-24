@@ -54,6 +54,30 @@ npm start
 
 启动前可运行 `git log -1 --oneline`，应看到最新的合并提交，而不是旧版 `0.1.0`。
 
+## 更新策略：升级代码，不覆盖用户数据
+
+每次发布新版后，在已有项目目录执行：
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+npm install
+npm run check
+npm test
+npm start
+```
+
+更新行为如下：
+
+- Git 会按文件合并/更新程序代码、文档和测试；已修改的文件会以新版为准，相当于局部覆盖。
+- `.local-data/` 被 Git 忽略，文章状态、素材库、授权配置不会被代码更新删除。
+- 浏览器中的文章和素材保存在本机 `localStorage`，刷新或升级代码不会主动清空。
+- 如果你手动改过代码，更新时 Git 会停止并提示冲突，不会静默覆盖；先备份或使用 `git stash`，确认后再合并。
+- 不建议每次重新下载 ZIP 并覆盖整个旧目录；优先使用上面的 `git pull` 更新方式。
+
+重要升级前仍建议备份 `.local-data/`。如需回到旧版本，可使用 Git 回退到指定提交，文章和素材数据仍独立保留。
+
 ## 已实现
 
 - 文字指令 → 文档状态 → GUI/预览同步
