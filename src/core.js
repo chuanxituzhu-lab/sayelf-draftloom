@@ -1,5 +1,6 @@
 import { autoComposeDocument, createCreativeAsset, summarizeArticle } from './visuals.js';
 import { WECHAT_LIMITS, inspectWechatArticle, charCount, truncateByChars } from './wechat-limits.js';
+import { sanitizeImportedDocument } from './document-import.js';
 
 export const MAX_HISTORY = 50;
 
@@ -280,7 +281,21 @@ export function importArticle({ text = '', filename = 'article.md', assets = [],
     original: { filename, text: source, importedAt: now },
     meta: { createdAt: now, updatedAt: now, revision: 1, importedFrom: filename, importWarnings: warnings, layoutMode: 'auto', subtitleSource: 'auto' }
   };
-  return autoCompose ? autoComposeDocument(document, visualOptions) : document;
+  const sanitized = sanitizeImportedDocument(document);
+  if (!autoCompose) return sanitized;
+  // The visual planner historically reads original.text first. Give it the
+  // cleaned structured text so generated titles/SVGs cannot reintroduce
+  // Markdown presentation markers, then restore the untouched source below.
+  const composeSource = sanitized.blocks
+    .map(block => block.text || (Array.isArray(block.items) ? block.items.join('\n') : ''))
+    .filter(Boolean)
+    .join('\n');
+  const composed = autoComposeDocument({
+    ...sanitized,
+    original: { ...sanitized.original, text: composeSource }
+  }, visualOptions);
+  composed.original = document.original;
+  return sanitizeImportedDocument(composed);
 }
 
 export function getLayoutGuidance(doc) {

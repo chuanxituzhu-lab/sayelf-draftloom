@@ -2,6 +2,7 @@ import { createInitialDocument, parseCommand, reduceDocument, VersionStore, impo
 import { analyzeGrowth, getDefaultGrowthProfile, growthBrief, normalizeGrowthProfile } from './growth.js';
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, formatBytes } from './wechat-limits.js';
 import { APP_VERSION } from './version.js';
+import { getArticleFileKind, isSupportedArticleFile } from './document-import.js';
 
 const STORAGE_KEY = 'wechat-layout-mvp:v0.1';
 const ASSET_LIBRARY_KEY = 'wechat-layout-mvp:asset-library:v0.1';
@@ -172,7 +173,7 @@ function render() {
       <div><strong>公众号排版</strong><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button>
         <button id="visualComposeBtn" title="根据文章语义生成标题图，并把素材/创意图放到合适章节">智能配图与标题</button><button id="assetAutoFillBtn" title="识别图片内容（文件名、描述、OCR/视觉标签）并匹配正文章节">图片智能导入</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
-        <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,text/plain,image/*" multiple hidden></label>
+        <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
       </div>
     </header>
     <main class="workspace">
@@ -183,7 +184,7 @@ function render() {
         <section><h3>版本记录</h3><div class="versions">${store.list().slice(-8).reverse().map(v=>`<div><b>#${v.seq}</b><span>${esc(v.label)}</span><time>${new Date(v.ts).toLocaleTimeString()}</time></div>`).join('')}</div></section>
       </aside>
       <section class="panel editor-panel">
-        <div id="importDrop" class="import-drop"><strong>拖入文章或图片，自动排版</strong><span>自动总结正文、生成爆款标题与标题图，并从素材库按章节智能填充；导入后可继续人工调整</span></div>
+        <div id="importDrop" class="import-drop"><strong>拖入文章、DOCX、PDF 或图片，自动排版</strong><span>DOCX/PDF 在本机识别并自动清理 *、#、反引号等特殊标记；随后总结正文、生成爆款标题与标题图，导入后可继续人工调整</span></div>
         <div class="command-box"><div class="command-label">文字指令</div><div class="command-row"><textarea id="commandInput" rows="1" placeholder="如：把当前改成引用 / 拆分当前段落 / 添加表格：列1|列2"></textarea><button id="runCommand">执行</button></div><div class="hint">支持按区块转换、拆分、主题切换和组件创建；表格可用换行或分号分隔；未识别的文字会作为新段落。</div></div>
         <div class="guidance-box"><div class="command-label">自动排版指导</div><div id="guidanceList">${renderGuidance()}</div></div>
         ${renderWechatLimits()}
@@ -684,21 +685,35 @@ async function submitDraftToWechat({skipConfirm=false}={}){
       setStatus('已生成本地微信草稿包');
     }
   } catch(error) { statusEl.className='draft-status local error'; statusEl.textContent=`提交失败：${error.message}`; setStatus(`草稿导出失败：${error.message}`); }
-}async function handleArticleImport(fileList=[], pastedText=''){
+}async function readArticleFile(file){
+  const kind=getArticleFileKind(file);
+  if(kind==='text') return {text:await file.text(),kind,warnings:[]};
+  if(kind!=='docx'&&kind!=='pdf') throw new Error(`不支持导入文件：${file.name||'未命名文件'}`);
+  const response=await fetch('/api/extract-document',{method:'POST',headers:{'content-type':file.type||'application/octet-stream','x-file-name':encodeURIComponent(file.name||`document.${kind}`)},body:await file.arrayBuffer()});
+  let result={};
+  try { result=await response.json(); } catch { throw new Error('本地文档识别服务返回了无效结果'); }
+  if(!response.ok||result.error) throw new Error(result.error||'本地文档识别失败');
+  if(!String(result.text||'').trim()) throw new Error(`${kind.toUpperCase()} 未识别出可用文字；扫描版 PDF 暂不支持 OCR`);
+  return result;
+}
+async function handleArticleImport(fileList=[], pastedText=''){
   try {
     const files=[...fileList];
-    const articleFile=files.find(file=>/\.(md|markdown|txt)$/i.test(file.name)||file.type.startsWith('text/'));
+    const articleFile=files.find(file=>isSupportedArticleFile(file));
     const imageFiles=files.filter(file=>file.type.startsWith('image/')||/\.(png|jpe?g|webp|gif|svg)$/i.test(file.name));
-    const text=articleFile?await articleFile.text():pastedText;
+    const extracted=articleFile?await readArticleFile(articleFile):{text:pastedText,kind:pastedText?'text':null,warnings:[]};
+    const text=extracted.text;
     if(!text&&!imageFiles.length) throw new Error('没有找到文章文字或图片');
     const newAssets=await Promise.all(imageFiles.map(async file=>{const prepared=await optimizeImageFile(file);return {id:crypto.randomUUID(),name:file.name,type:prepared.type,size:prepared.size,dataUrl:prepared.dataUrl,alt:file.name.replace(/\.[^.]+$/,'')};}));
     const assets=mergeAssets(loadAssetLibrary(), newAssets);
     const incoming=importArticle({text,filename:articleFile?.name||'pasted-article.txt',assets,autoCompose:true,visualOptions:{generate:true,maxGenerated:3,titleMode:'viral',forceTitle:true}});
+    if(extracted.warnings?.length) incoming.meta.importWarnings=[...(incoming.meta.importWarnings||[]),...extracted.warnings.map(item=>`本地 ${extracted.kind?.toUpperCase()||'文档'} 识别提示：${item}`)];
     if(commit({type:'replaceDocument',doc:incoming},`自动排版导入：${articleFile?.name||`${assets.length} 张图片`}`)){
       const warnings=incoming.meta.importWarnings||[];
       const generated=incoming.meta.visualPlan?.generatedAssetIds?.length||0;
       const reused=Math.max(0,assets.length-newAssets.length);
-      setStatus(warnings.length?`导入完成，${warnings.length} 条提示`:`导入完成，图片已自动入库并填充${reused?`（复用素材 ${reused} 张）`:''}${generated?`（新增创意图 ${generated} 张）`:''}`);
+      const sourceLabel=extracted.kind==='docx'?'DOCX':extracted.kind==='pdf'?'PDF':'文字稿';
+      setStatus(warnings.length?`已本地识别 ${sourceLabel} 并导入，${warnings.length} 条提示`:`已本地识别 ${sourceLabel}，导入完成${reused?`，复用素材 ${reused} 张`:''}${generated?`，新增创意图 ${generated} 张`:''}`);
     }
   } catch(err) { setStatus(`导入失败：${err.message}`); }
 }

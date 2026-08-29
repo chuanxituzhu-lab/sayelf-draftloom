@@ -1,6 +1,6 @@
 ---
 name: wechat-layout
-description: Edit and preview Chinese WeChat Official Account articles with the local-first document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、图片插入或本地预览。
+description: Edit and preview Chinese WeChat Official Account articles with local-first DOCX/PDF text extraction, special-marker cleanup, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、图片插入或本地预览。
 ---
 
 # 公众号排版 Skill — MVP v0.1
@@ -31,7 +31,7 @@ description: Edit and preview Chinese WeChat Official Account articles with the 
 - `addImage({name,type,dataUrl,alt})`：新图片进入素材库。
 - `replaceSelectedImage(assetId)`：用素材库图片替换当前选中的图片区块。
 - `deleteImage(assetId)`：从素材库删除素材，并同步移除文章/画廊中的对应图片引用；支持 undo/redo。
-- `importArticle({text,filename,assets})`：导入 Markdown/TXT 与本地图片，自动总结正文、生成爆款标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。
+- `importArticle({text,filename,assets})`：导入已提取的文章文字与本地图片，自动清理 `*`、`#`、反引号等展示标记、总结正文、生成爆款标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。GUI 的 DOCX/PDF 识别通过本机 `/api/extract-document` 完成，原始稿件保留用于回滚。
 - `autoComposeVisuals({generate,maxGenerated,titleMode,forceTitle,fillUnmatched})`：识别图片文件名、描述以及可选的 OCR/视觉标签，再根据文章语义生成摘要与爆款标题计划，自动将素材/本地创意图插入章节；`fillUnmatched:true` 会把剩余素材库图片按顺序补入正文。每个匹配图片区块会记录置信度、命中关键词、内容标签和识别来源，生成结果可人工替换、移动或删除。`forceTitle:true` 仅用于用户主动点击“生成爆款标题”，人工编辑过的标题默认锁定。
 - `coverSet()`：根据封面与内容摘要设置区，优先复用素材库中的合规封面，置为文章首图并同步摘要；若没有合规封面才生成一个可替换候选，不重复导入已有素材。`smartCover()` 作为内部兼容别名保留。
 - GUI 的“公众号封面与内容摘要”独立设置区提供封面素材选择、900×383 头条预览、主/副文案（10/14 字）和内容摘要（128 字）编辑；手工封面文案会锁定，重新执行智能设置可解除锁定并按正文重算。

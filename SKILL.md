@@ -1,12 +1,12 @@
 ---
 name: sayelf-draftloom
-description: 公众号自动排版。将 Markdown/TXT 稿件自动排版为微信公众号文章：结构化编辑、图片插入、实时预览、去 AI 味、导出微信兼容 HTML。当用户提到 公众号排版、微信文章排版、公众号文章编辑、草稿生成 或 导出微信 HTML 时使用此技能。
+description: 公众号自动排版。将 Markdown/TXT/DOCX/PDF 稿件自动排版为微信公众号文章：本地文字识别、特殊符号清理、结构化编辑、图片插入、实时预览、去 AI 味、导出微信兼容 HTML。当用户提到 公众号排版、微信文章排版、公众号文章编辑、草稿生成 或 导出微信 HTML 时使用此技能。
 agent_created: true
 ---
 
 # 公众号自动排版（sayelf-draftloom）
 
-基于 draftloom（本地优先、零第三方依赖的公众号排版工具，MVP v0.1）实现文字稿件到微信文章的自动排版。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。
+基于 draftloom（本地优先的公众号排版工具，MVP v0.1）实现文字稿件到微信文章的自动排版。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。DOCX/PDF 由本地解析器提取文字，导入前自动清理 `*`、`#`、反引号等标记；扫描版 PDF 暂不做 OCR。
 
 ## 安装（WorkBuddy）
 
@@ -14,12 +14,12 @@ agent_created: true
 git clone https://github.com/chuanxituzhu-lab/sayelf-draftloom.git ~/.workbuddy/skills/sayelf-draftloom
 ```
 
-无需安装第三方依赖，仅需 Node.js。校验安装：在技能目录运行 `npm test`（应 17 个测试全部通过）。
+运行 `npm install` 安装本地 DOCX/PDF 解析器。校验安装：在技能目录运行 `npm test`（当前应 51 个测试全部通过）。
 
 ## 何时使用
 
 - 用户要求排版微信公众号文章、美化公众号稿件
-- 导入 Markdown/TXT 与图片，生成公众号文章
+- 导入 Markdown/TXT/DOCX/PDF 与图片，生成公众号文章
 - 导出微信兼容 HTML 或生成本地交付包
 - 去除文本 AI 味、切换文章主题
 
@@ -48,7 +48,7 @@ npm run cli -- publish --out .local-data/publish/latest  # 生成本地交付包
 npm start   # 浏览器打开 http://127.0.0.1:4173
 ```
 
-页面提供左右分栏编辑与微信实时预览，支持 Markdown/TXT + 多图片拖放导入。
+页面提供左右分栏编辑与微信实时预览，支持 Markdown/TXT/DOCX/PDF + 多图片拖放导入；DOCX/PDF 仅在本机识别，原稿保留用于回滚。
 
 ### MCP
 

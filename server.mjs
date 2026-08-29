@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyProtectedLocalConfig } from './scripts/local-config.mjs';
+import { extractLocalDocument, MAX_DOCUMENT_BYTES } from './scripts/document-extract.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 applyProtectedLocalConfig(root);
@@ -25,6 +26,21 @@ async function readJson(req) {
     if (text.length > 14_000_000) throw new Error('请求内容过大');
   }
   return text ? JSON.parse(text) : {};
+}
+async function readBuffer(req, maxBytes = MAX_DOCUMENT_BYTES) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) throw new Error(`文档超过本地导入上限（${maxBytes / 1024 / 1024}MB）`);
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks, total);
+}
+function requestFilename(req) {
+  const raw = String(req.headers['x-file-name'] || 'document');
+  try { return decodeURIComponent(raw); } catch { return raw; }
 }
 async function readSavedAuth() {
   try {
@@ -93,6 +109,11 @@ const server = http.createServer(async (req, res) => {
     if (raw === '/api/wechat/auth/callback' && req.method === 'POST') {
       const body = await readJson(req);
       return json(res, 200, await saveAuth(body));
+    }
+    if (raw === '/api/extract-document' && req.method === 'POST') {
+      const filename = requestFilename(req);
+      const buffer = await readBuffer(req);
+      return json(res, 200, await extractLocalDocument({ buffer, filename, contentType: req.headers['content-type'] }));
     }
     if (raw === '/api/wechat/draft' && req.method === 'POST') { const body = await readJson(req); return json(res, 200, await publishGuiDocument(body.doc, body.confirm === true)); }
     const rel = raw === '/' ? 'index.html' : raw.replace(/^\/+/, '');
