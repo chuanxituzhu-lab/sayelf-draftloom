@@ -15,6 +15,7 @@ const STOP_WORDS = new Set([
   '图片', '图像', '素材', '章节', '部分', '第一', '第二', '自动', '填充',
   'with', 'from', 'that', 'this', 'the', 'and', 'for', 'are', 'you', 'your'
 ]);
+const CORE_SIGNAL_TERMS = Object.freeze(['本质', '核心', '关键', '重要', '所以', '因此', '真正', '价值', '方法', '执行', '意味着', '结论', '不是', 'AI']);
 
 const PALETTES = Object.freeze({
   minimal: { bg: '#eef6f2', ink: '#153b2e', accent: '#1f9d72', soft: '#a9dfc7' },
@@ -86,17 +87,14 @@ export function deriveArticleTitle({ text = '', filename = '', currentTitle = ''
 export function deriveArticleSubtitle({ text = '', currentSubtitle = '' } = {}) {
   const current = clean(currentSubtitle);
   if (current && current !== DEFAULT_SUBTITLE) return current;
-  const paragraph = String(text).replace(/^---[\s\S]*?---\s*/m, '').split(/\r?\n\s*\r?\n/)
-    .map(value => clean(value).replace(/^#{1,6}\s+/, '').replace(/!\[[^\]]*\]\([^)]*\)/g, ''))
-    .find(value => value.length >= 12);
-  return paragraph ? truncate(paragraph, 64) : DEFAULT_SUBTITLE;
+  return extractCoreContent({ text, max: 64 }).summary || DEFAULT_SUBTITLE;
 }
 
 function plainArticleText(value = '') {
   return String(value)
     .replace(/^---[\s\S]*?---\s*/m, '')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}#{1,6}\s+.+$/gm, '')
     .replace(/^\s*>\s?/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/\|/g, ' ')
@@ -104,13 +102,34 @@ function plainArticleText(value = '') {
     .trim();
 }
 
+/** Selects evidence-bearing sentences locally for a human-reviewable core summary. */
+export function extractCoreContent({ text = '', title = '', max = 88, maxPoints = 3 } = {}) {
+  const source = plainArticleText(text);
+  const currentTitle = clean(title);
+  const body = currentTitle && source.startsWith(currentTitle) ? source.slice(currentTitle.length).trim() : source;
+  const sentences = body.split(/(?<=[。！？!?；;])\s*/).map(clean).filter(item => item.length >= 8);
+  const ranked = sentences.map((sentence, index) => ({
+    sentence,
+    index,
+    score: CORE_SIGNAL_TERMS.reduce((score, term) => score + (sentence.includes(term) ? 1 : 0), 0) + (index === 0 ? 0.35 : 0)
+  })).sort((a, b) => b.score - a.score || a.index - b.index);
+  const selected = (ranked.length ? ranked : [{ sentence: clean(title) || source, index: 0, score: 0 }])
+    .slice(0, Math.max(1, Math.min(5, Number(maxPoints) || 3)))
+    .sort((a, b) => a.index - b.index)
+    .filter(item => item.sentence);
+  const fallback = currentTitle || body;
+  return {
+    summary: truncate(selected.slice(0, 2).map(item => item.sentence).join(' ') || fallback || '围绕文章主题提炼一个清晰、可读、值得继续阅读的观点。', max),
+    points: selected.map(item => truncate(item.sentence, 54)),
+    keywords: extractKeywords(body, 6),
+    source: 'local-deterministic',
+    generatedAt: new Date().toISOString()
+  };
+}
+
 /** Returns a short, deterministic summary that can be shown before a title is applied. */
 export function summarizeArticle({ text = '', title = '', max = 88 } = {}) {
-  const source = plainArticleText(text);
-  const sentences = source.split(/(?<=[。！？!?；;])\s*/).map(clean).filter(item => item.length >= 8);
-  const summary = sentences.slice(0, 2).join(' ');
-  const fallback = clean(title) || source;
-  return truncate(summary || fallback || '围绕文章主题提炼一个清晰、可读、值得继续阅读的观点。', max);
+  return extractCoreContent({ text, title, max }).summary;
 }
 
 function titleTopic({ text = '', filename = '', keywords = [], profile = {} } = {}) {
@@ -405,9 +424,10 @@ function insertAfterAnchor(blocks, anchorId, block) {
 }
 
 /** Applies the plan and returns a new document, suitable for a reducer intent. */
-export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false } = {}) {
+export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false, useCoreForCover = false } = {}) {
   const next = clone(input);
   const source = articleSource(next);
+  const coreContent = extractCoreContent({ text: source, title: next.title, max: 96, maxPoints: 3 });
   const titlePlan = titleMode === 'viral'
     ? generateViralTitlePlan({ text: source, filename: next.meta?.importedFrom || '', currentTitle: next.title, profile: titleProfile })
     : null;
@@ -429,10 +449,10 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
   }
   const generatedAssetIds = [];
   const findGenerated = (role, anchorId = null) => next.assets.find(asset => asset.generated && asset.source === 'draftloom:creative-local' && asset.visualRole === role && (asset.visualAnchor || null) === (anchorId || null));
-  const addOrUpdateGenerated = ({ role, anchorId = null, index = 0, brief = '' }) => {
+  const addOrUpdateGenerated = ({ role, anchorId = null, index = 0, brief = '', subtitle = '' }) => {
     const keywords = extractKeywords(`${next.title}\n${brief}\n${source}`, 6);
     const existing = findGenerated(role, anchorId);
-    const asset = createCreativeAsset({ id: existing?.id, title: role === 'cover' ? next.title : (brief || next.title), subtitle: role === 'cover' ? next.subtitle : '文章语义场景图', keywords, theme: next.theme, role, index, anchorId });
+    const asset = createCreativeAsset({ id: existing?.id, title: role === 'cover' ? next.title : (brief || next.title), subtitle: role === 'cover' ? (subtitle || next.subtitle) : '文章语义场景图', keywords, theme: next.theme, role, index, anchorId });
     const position = next.assets.findIndex(item => item.id === asset.id);
     if (position >= 0) next.assets[position] = asset;
     else next.assets.push(asset);
@@ -441,7 +461,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
   };
 
   let coverAssetId = plan.coverAssetId;
-  if (includeCover && !coverAssetId && generate) coverAssetId = addOrUpdateGenerated({ role: 'cover', brief: next.title }).id;
+  if (includeCover && !coverAssetId && generate) coverAssetId = addOrUpdateGenerated({ role: 'cover', brief: next.title, subtitle: useCoreForCover ? coreContent.summary : next.subtitle }).id;
   if (includeCover && coverAssetId) {
     const existingCoverIndex = next.blocks.findIndex(block => block.type === 'image' && block.assetId === coverAssetId);
     if (existingCoverIndex >= 0) {
@@ -523,6 +543,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
       version: 1,
       generatedAt: new Date().toISOString(),
       title: titleInfo,
+      coreContent,
       keywords: plan.keywords,
       assetAnalyses: finalAssetAnalyses,
       recognition: plan.recognition,

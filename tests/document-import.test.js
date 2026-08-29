@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getArticleFileKind, sanitizeArticleText, sanitizeImportedDocument } from '../src/document-import.js';
-import { importArticle } from '../src/core.js';
+import { importArticle, renderArticleHtml } from '../src/core.js';
+import { detectArticleEmphasis } from '../src/document-import.js';
 import { documentKind, extractLocalDocument } from '../scripts/document-extract.mjs';
+import { MAX_ARTICLE_HISTORY, createArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from '../src/article-history.js';
 
 function makePdf(text) {
   const stream = `BT\n/F1 18 Tf\n72 720 Td\n(${text.replace(/[()\\]/g, '\\$&')}) Tj\nET`;
@@ -74,6 +76,23 @@ test('importArticle keeps markers out of visible composed content while preservi
   assert.equal(imported.original.text, source);
 });
 
+test('article emphasis detects important and numbered sections and renders a color block', () => {
+  assert.equal(detectArticleEmphasis('重点：先做最重要的事情').label, '重点');
+  assert.equal(detectArticleEmphasis('第3章：执行').label, '章节');
+  assert.equal(detectArticleEmphasis('一~N：持续迭代').label, '范围');
+  assert.equal(detectArticleEmphasis('01 自媒体的本质').label, '编号');
+  assert.equal(detectArticleEmphasis('上一段结论。02 创作不是闭门造车').label, '编号');
+  assert.equal(detectArticleEmphasis('上一段结论。重点：先做最重要的事情').label, '重点');
+  assert.equal(detectArticleEmphasis('一个章节标题', { type: 'heading' }).label, '标题');
+  assert.equal(detectArticleEmphasis('普通正文段落'), null);
+  const document = importArticle({ text: '标题\n\n重点：先做最重要的事情\n\n普通正文段落' });
+  assert.equal(document.blocks[0].emphasis, 'inline');
+  assert.ok(document.blocks[0].emphasisRanges[0].end < document.blocks[0].text.length);
+  assert.equal(document.blocks[1].emphasis, undefined);
+  assert.match(renderArticleHtml(document), /<mark style="background:#fff1cf/);
+  assert.doesNotMatch(renderArticleHtml(document), /font-weight:700;color:#17212b;background:#fff7e8/);
+});
+
 test('extractLocalDocument extracts text from a local PDF buffer', async () => {
   const result = await extractLocalDocument({
     buffer: makePdf('Local PDF * # text'),
@@ -83,4 +102,25 @@ test('extractLocalDocument extracts text from a local PDF buffer', async () => {
   assert.equal(result.kind, 'pdf');
   assert.equal(result.pages, 1);
   assert.match(result.text, /Local PDF/);
+});
+
+test('article history preserves multiple article structures without duplicating image data', () => {
+  const first = { id: 'a1', title: '第一篇', blocks: [{ type: 'paragraph', text: '第一篇正文' }], assets: [{ id: 'img1', dataUrl: 'data:image/png;base64,large' }], original: { filename: 'first.docx', text: '第一篇正文' } };
+  const second = { id: 'a2', title: '第二篇', blocks: [{ type: 'paragraph', text: '第二篇正文' }], assets: [], original: { filename: 'second.pdf', text: '第二篇正文' } };
+  const entries = upsertArticleHistory(upsertArticleHistory([], first, '2026-08-29T00:00:00.000Z'), second, '2026-08-29T01:00:00.000Z');
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].title, '第二篇');
+  assert.equal(entries[1].doc.assets[0].dataUrl, undefined);
+  const restored = restoreArticleHistoryEntry(entries[1], [{ id: 'img1', dataUrl: 'data:image/png;base64,restored' }]);
+  assert.equal(restored.assets[0].dataUrl, 'data:image/png;base64,restored');
+  assert.equal(MAX_ARTICLE_HISTORY, 12);
+  const manyEntries = Array.from({ length: MAX_ARTICLE_HISTORY + 2 }, (_, index) => ({
+    id: `article-${index}`,
+    title: `文章 ${index}`,
+    blocks: [{ type: 'paragraph', text: `正文 ${index}` }],
+    assets: [],
+    original: { filename: `${index}.txt`, text: `正文 ${index}` }
+  })).reduce((result, item) => upsertArticleHistory(result, item), []);
+  assert.equal(manyEntries.length, MAX_ARTICLE_HISTORY);
+  assert.equal(createArticleHistoryEntry({ blocks: [], original: null }), null);
 });

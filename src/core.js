@@ -1,6 +1,6 @@
 import { autoComposeDocument, createCreativeAsset, summarizeArticle } from './visuals.js';
 import { WECHAT_LIMITS, inspectWechatArticle, charCount, truncateByChars } from './wechat-limits.js';
-import { sanitizeImportedDocument } from './document-import.js';
+import { applyArticleEmphasis, sanitizeImportedDocument } from './document-import.js';
 
 export const MAX_HISTORY = 50;
 
@@ -54,7 +54,7 @@ export function humanizeDocument(doc, mode = 'natural') {
     return block;
   });
   next.meta = { ...next.meta, humanizer: { mode, changedBlocks, appliedAt: new Date().toISOString() } };
-  return next;
+  return applyArticleEmphasis(next);
 }
 
 export function createInitialDocument() {
@@ -590,7 +590,8 @@ export function parseCommand(input) {
   if (/^(?:拆分|分割)(?:当前|选中)?(?:段落|内容|块)?$/i.test(raw)) return { type: 'splitSelected' };
   if ((m = raw.match(/^(?:主题|样式)[：:]?\s*(.+)$/i))) return { type: 'setTheme', theme: normalizeTheme(m[1].trim()) };
   if ((m = raw.match(/^(?:去\s*AI\s*味|自然化|润色)(?:[：:]?\s*(保守|自然|conservative|natural))?$/i))) return { type: 'humanize', mode: /保守|conservative/i.test(m[1] || '') ? 'conservative' : 'natural' };
-  if (/^(?:智能配图|自动配图|生成标题图|自动标题(?:图文)?)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, titleMode: 'viral' };
+  if (/^(?:提炼核心(?:内容)?(?:并)?生成(?:一张)?标题图|生成标题(?:图片|图))$/i.test(raw)) return { type: 'generateTitleImage' };
+  if (/^(?:智能配图|自动配图|自动标题(?:图文)?)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, titleMode: 'viral' };
   // The former import-style command is intentionally retired so it cannot
   // accidentally append the phrase as a paragraph. Use “封面一键设置”.
   if (/^封面一键入库$/i.test(raw)) return { type: 'noop' };
@@ -699,6 +700,18 @@ export function reduceDocument(doc, intent, selectedId = null) {
         const coverResult = reduceDocument(composed, { type: 'setCoverAsset', assetId: coverAssetId }, selectedId);
         return { doc: coverResult.doc, selectedId: coverResult.selectedId, changed: true };
       }
+      return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
+    }
+    case 'generateTitleImage': {
+      const composed = autoComposeDocument(next, {
+        generate: true,
+        maxGenerated: 0,
+        includeCover: true,
+        titleMode: 'safe',
+        forceTitle: false,
+        fillUnmatched: false,
+        useCoreForCover: true
+      });
       return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
     }
     case 'optimizeWechat': {
@@ -880,16 +893,40 @@ export function reduceDocument(doc, intent, selectedId = null) {
       next.blocks.push(block); selected = block.id; break;
     }
     case 'replaceDocument': {
-      const replacement = clone(intent.doc);
+      const replacement = applyArticleEmphasis(intent.doc);
       replacement.theme = normalizeTheme(replacement.theme);
       return { doc: replacement, selectedId: replacement.blocks[0]?.id || null, changed: true };
     }
     default: changed = false;
   }
-  return { doc: next, selectedId: selected, changed };
+  return { doc: applyArticleEmphasis(next), selectedId: selected, changed };
 }
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+
+/** Render only the detected editorial ranges, keeping the surrounding text plain. */
+export function renderInlineEmphasis(value = '', ranges = [], { markAttrs = ' class="inline-emphasis"', strongAttrs = ' class="inline-emphasis"' } = {}) {
+  const text = String(value ?? '');
+  const ordered = (Array.isArray(ranges) ? ranges : [])
+    .map(range => ({
+      start: Math.max(0, Math.min(text.length, Number(range.start) || 0)),
+      end: Math.max(0, Math.min(text.length, Number(range.end) || 0)),
+      style: range.style === 'mark' ? 'mark' : 'strong'
+    }))
+    .filter(range => range.end > range.start)
+    .sort((a, b) => a.start - b.start || b.end - a.end);
+  let cursor = 0;
+  let html = '';
+  for (const range of ordered) {
+    if (range.start < cursor) continue;
+    html += escapeHtml(text.slice(cursor, range.start));
+    const tag = range.style === 'mark' ? 'mark' : 'strong';
+    const attrs = range.style === 'mark' ? markAttrs : strongAttrs;
+    html += `<${tag}${attrs}>${escapeHtml(text.slice(range.start, range.end))}</${tag}>`;
+    cursor = range.end;
+  }
+  return html + escapeHtml(text.slice(cursor));
+}
 
 function getCoverBlock(doc = {}) {
   const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
@@ -920,7 +957,7 @@ export function renderDocumentBody(doc) {
     : `<div class="wechat-cover wechat-cover-placeholder" data-wechat-cover="true">封面图片位置 · 请从素材库插入或导入一张封面图</div>`;
   const renderBlock = block => {
     if (coverBlock && block.id === coverBlock.id) return '';
-    const text = escapeHtml(block.text || '');
+    const text = renderInlineEmphasis(block.text || '', block.emphasisRanges);
     if (block.type === 'heading') return `<h2>${text}</h2>`;
     if (block.type === 'quote') return `<blockquote>${text}</blockquote>`;
     if (block.type === 'list') {
@@ -957,6 +994,8 @@ export function renderArticleHtml(doc) {
     meta: 'font-size:12px;color:#a0a8b0;margin-bottom:28px;text-align:center;',
      heading: `font-family:${theme.heading};font-size:20px;margin:28px 0 12px;padding-left:10px;border-left:4px solid ${theme.accent};color:${theme.ink};`,
     paragraph: 'font-size:16px;line-height:1.9;text-align:justify;white-space:pre-wrap;margin:16px 0;',
+    inlineMark: `background:#fff1cf;color:${theme.ink};font-weight:700;padding:0 .18em;border-radius:3px;`,
+    inlineStrong: `font-weight:700;color:${theme.ink};`,
     quote: `margin:20px 0;padding:13px 15px;background:${theme.surface};border-left:3px solid ${theme.accent};color:#66727c;`,
      imageFigure: 'margin:22px 0;text-align:center;',
      image: 'max-width:100%;display:block;margin:0 auto;border-radius:4px;',
@@ -992,7 +1031,7 @@ export function renderArticleHtml(doc) {
     : '';
   const renderInlineBlock = block => {
     if (coverBlock && block.id === coverBlock.id) return '';
-    const text = escapeHtml(block.text || '');
+    const text = renderInlineEmphasis(block.text || '', block.emphasisRanges, { markAttrs: ` style="${styles.inlineMark}"`, strongAttrs: ` style="${styles.inlineStrong}"` });
     if (block.type === 'heading') return `<h2 style="${styles.heading}">${text}</h2>`;
     if (block.type === 'quote') return `<blockquote style="${styles.quote}">${text}</blockquote>`;
     if (block.type === 'list') {

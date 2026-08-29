@@ -77,6 +77,21 @@ test('smart cover adds a library asset, places it first, and keeps the summary w
   assert.deepEqual(parseCommand('封面一键入库'), { type: 'noop' });
 });
 
+test('title image action extracts core content without replacing the current title', () => {
+  const doc = importArticle({ text: '# 人工确认标题\n\nAI 可以降低制作成本，但真正稀缺的是 Idea 的价值。\n\n持续执行才能获得反馈。' });
+  const result = reduceDocument(doc, { type: 'generateTitleImage' });
+  assert.equal(result.changed, true);
+  assert.equal(result.doc.title, '人工确认标题');
+  assert.match(result.doc.meta.visualPlan.coreContent.summary, /真正稀缺的是 Idea/);
+  assert.equal(result.doc.blocks[0].visualRole, 'cover');
+  const cover = result.doc.assets.find(asset => asset.id === result.doc.blocks[0].assetId);
+  assert.equal(cover.generated, true);
+  assert.equal(cover.width, 900);
+  assert.equal(cover.height, 383);
+  assert.match(cover.coverSub, /^AI 可以降低/);
+  assert.deepEqual(parseCommand('提炼核心并生成标题图'), { type: 'generateTitleImage' });
+});
+
 test('cover copy can be edited in the dedicated cover settings and stays locked until smart reset', () => {
   let doc = createInitialDocument();
   doc = reduceDocument(doc, { type: 'smartCover' }).doc;

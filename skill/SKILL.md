@@ -32,6 +32,9 @@ description: Edit and preview Chinese WeChat Official Account articles with loca
 - `replaceSelectedImage(assetId)`：用素材库图片替换当前选中的图片区块。
 - `deleteImage(assetId)`：从素材库删除素材，并同步移除文章/画廊中的对应图片引用；支持 undo/redo。
 - `importArticle({text,filename,assets})`：导入已提取的文章文字与本地图片，自动清理 `*`、`#`、反引号等展示标记、总结正文、生成爆款标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。GUI 的 DOCX/PDF 识别通过本机 `/api/extract-document` 完成，原始稿件保留用于回滚。
+- GUI 提供“清空重传”和“文章记录”：换稿前自动保存当前稿件，最近 12 篇文章结构保存在浏览器本机；记录可重新打开或删除，图片引用复用本地素材库。
+- 导入或编辑时，普通段落保持原样；重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号只在对应文字范围内加粗或加浅色标记，状态可随文章版本一起回滚。
+- `generateTitleImage`：本地提炼文章核心内容，生成一张 900×383 标题图片并写入素材库，标题和摘要仍可人工修改。
 - `autoComposeVisuals({generate,maxGenerated,titleMode,forceTitle,fillUnmatched})`：识别图片文件名、描述以及可选的 OCR/视觉标签，再根据文章语义生成摘要与爆款标题计划，自动将素材/本地创意图插入章节；`fillUnmatched:true` 会把剩余素材库图片按顺序补入正文。每个匹配图片区块会记录置信度、命中关键词、内容标签和识别来源，生成结果可人工替换、移动或删除。`forceTitle:true` 仅用于用户主动点击“生成爆款标题”，人工编辑过的标题默认锁定。
 - `coverSet()`：根据封面与内容摘要设置区，优先复用素材库中的合规封面，置为文章首图并同步摘要；若没有合规封面才生成一个可替换候选，不重复导入已有素材。`smartCover()` 作为内部兼容别名保留。
 - GUI 的“公众号封面与内容摘要”独立设置区提供封面素材选择、900×383 头条预览、主/副文案（10/14 字）和内容摘要（128 字）编辑；手工封面文案会锁定，重新执行智能设置可解除锁定并按正文重算。
@@ -92,6 +95,7 @@ description: Edit and preview Chinese WeChat Official Account articles with loca
 - `主题：墨韵` / `主题：暖阳`
 - `去 AI 味：自然`
 - `智能配图`
+- `提炼核心并生成标题图`
 - `封面一键设置`
 - `爆款标题`
 - `图片智能导入`

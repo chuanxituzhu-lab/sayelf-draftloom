@@ -1,14 +1,17 @@
-import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, THEMES, normalizeTheme, renderDocumentBody, renderArticleHtml } from './core.js';
+import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, THEMES, normalizeTheme, renderDocumentBody, renderArticleHtml, renderInlineEmphasis } from './core.js';
 import { analyzeGrowth, getDefaultGrowthProfile, growthBrief, normalizeGrowthProfile } from './growth.js';
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, formatBytes } from './wechat-limits.js';
 import { APP_VERSION } from './version.js';
-import { getArticleFileKind, isSupportedArticleFile } from './document-import.js';
+import { applyArticleEmphasis, getArticleFileKind, isSupportedArticleFile } from './document-import.js';
+import { MAX_ARTICLE_HISTORY, removeArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from './article-history.js';
 
 const STORAGE_KEY = 'wechat-layout-mvp:v0.1';
 const ASSET_LIBRARY_KEY = 'wechat-layout-mvp:asset-library:v0.1';
 const GROWTH_PROFILE_KEY = 'wechat-layout-mvp:growth-profile:v0.1';
+const ARTICLE_HISTORY_KEY = 'wechat-layout-mvp:article-history:v1';
 const MAX_ASSETS = 200;
 let doc = loadDocument() || { ...createInitialDocument(), assets: loadAssetLibrary() };
+let articleHistory = loadArticleHistory();
 let selectedId = doc.blocks[0]?.id || null;
 let zoom = 1;
 let store = new VersionStore(doc);
@@ -27,8 +30,9 @@ function loadDocument() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (!saved) return null;
-    saved.assets = mergeAssets(saved.assets || [], loadAssetLibrary());
-    return saved;
+    const normalized = applyArticleEmphasis(saved);
+    normalized.assets = mergeAssets(normalized.assets || [], loadAssetLibrary());
+    return normalized;
   } catch { return null; }
 }
 function loadAssetLibrary() {
@@ -36,6 +40,73 @@ function loadAssetLibrary() {
     const value = JSON.parse(localStorage.getItem(ASSET_LIBRARY_KEY) || '[]');
     return Array.isArray(value) ? value.filter(asset => asset?.id && asset?.dataUrl).slice(-MAX_ASSETS) : [];
   } catch { return []; }
+}
+function loadArticleHistory() {
+  try {
+    const value = JSON.parse(localStorage.getItem(ARTICLE_HISTORY_KEY) || '[]');
+    return Array.isArray(value) ? value.filter(item => item?.id && item?.doc).slice(0, MAX_ARTICLE_HISTORY) : [];
+  } catch { return []; }
+}
+function persistArticleHistory() {
+  try {
+    localStorage.setItem(ARTICLE_HISTORY_KEY, JSON.stringify(articleHistory));
+    return true;
+  } catch {
+    // Keep the most recent entries if the browser's local quota is nearly full.
+    articleHistory = articleHistory.slice(0, Math.max(1, Math.floor(MAX_ARTICLE_HISTORY / 2)));
+    try { localStorage.setItem(ARTICLE_HISTORY_KEY, JSON.stringify(articleHistory)); return true; } catch { return false; }
+  }
+}
+function archiveArticle(article = doc) {
+  const next = upsertArticleHistory(articleHistory, article);
+  if (next.length === articleHistory.length && next[0]?.id === articleHistory[0]?.id && next[0]?.savedAt === articleHistory[0]?.savedAt) return false;
+  articleHistory = next;
+  return persistArticleHistory();
+}
+function refreshArticleHistory() {
+  const pane = document.querySelector('#articleHistoryPane');
+  if (!pane) return;
+  pane.innerHTML = renderArticleHistory();
+  bindArticleHistoryEvents();
+}
+function replaceCurrentDocument(next, label) {
+  const previous = structuredClone(doc);
+  const changed = commit({ type: 'replaceDocument', doc: next }, label);
+  if (changed) {
+    archiveArticle(previous);
+    refreshArticleHistory();
+  }
+  return changed;
+}
+function clearCurrentArticle() {
+  archiveArticle(doc);
+  doc = { ...createInitialDocument(), assets: loadAssetLibrary() };
+  selectedId = doc.blocks[0]?.id || null;
+  store = new VersionStore(doc);
+  growthReport = null;
+  lastWechatCheck = null;
+  persist();
+  render();
+  setStatus('当前文章已清空，可重新上传；原稿已保存到文章记录');
+}
+function restoreSavedArticle(id) {
+  const entry = articleHistory.find(item => item.id === id);
+  const restored = restoreArticleHistoryEntry(entry, loadAssetLibrary());
+  if (!restored) { setStatus('文章记录不存在或已损坏'); return; }
+  replaceCurrentDocument(restored, `打开文章：${entry.title}`);
+  setStatus(`已打开文章：${entry.title}`);
+}
+function saveCurrentArticle() {
+  if (!archiveArticle(doc)) { setStatus('当前没有可保存的文章内容'); return; }
+  refreshArticleHistory();
+  setStatus('当前文章已保存到文章记录');
+}
+function deleteSavedArticle(id) {
+  if (!articleHistory.some(item => item.id === id)) return;
+  articleHistory = removeArticleHistoryEntry(articleHistory, id);
+  persistArticleHistory();
+  refreshArticleHistory();
+  setStatus('已删除文章记录，当前文章不受影响');
 }
 function mergeAssets(...lists) {
   const byId = new Map();
@@ -84,6 +155,15 @@ function refreshLibraryPane() {
   pane.innerHTML = renderLibraryPane();
   bindLibraryEvents();
 }
+function renderArticleHistory() {
+  const cards = articleHistory.length
+    ? articleHistory.map(item => {
+      const savedAt = new Date(item.savedAt).toLocaleString();
+      return `<div class="article-history-item"><button class="article-history-open" data-restore-article="${esc(item.id)}" title="打开这篇文章"><strong>${esc(item.title)}</strong><small>${esc(item.filename)} · ${esc(savedAt)}</small></button><button class="article-history-delete" data-delete-article="${esc(item.id)}" title="删除这条记录" aria-label="删除这条记录">×</button></div>`;
+    }).join('')
+    : '<div class="empty article-history-empty">上传或保存文章后，会保留在这里</div>';
+  return `<section class="article-history"><div class="section-head"><h3>文章记录</h3><span class="hint">${articleHistory.length}/${MAX_ARTICLE_HISTORY}</span></div><div class="article-history-tools"><button id="saveArticleBtn">保存当前</button><span>换稿前自动保存</span></div><div class="article-history-list">${cards}</div></section>`;
+}
 
 function growthBriefText(brief) {
   return [
@@ -99,9 +179,11 @@ function growthBriefText(brief) {
 
 function renderTitlePlan() {
   const plan = doc.meta?.titlePlan;
-  if (!plan?.candidates?.length) return '<div class="title-ai-empty">导入文章或点击“智能配图与标题”，自动总结内容并生成爆款标题候选。</div>';
+  const core = doc.meta?.visualPlan?.coreContent;
+  const coreMarkup = core?.summary ? `<div class="title-ai-core"><b>核心提炼</b><span>${esc(core.summary)}</span>${core.points?.length ? `<small>${esc(core.points.slice(0, 3).join('；'))}</small>` : ''}</div>` : '';
+  if (!plan?.candidates?.length) return coreMarkup || '<div class="title-ai-empty">导入文章或点击“智能配图与标题”，自动总结内容并生成爆款标题候选。</div>';
   const candidates = plan.candidates.map((item, index) => `<button type="button" class="title-candidate ${item.title === doc.title ? 'active' : ''}" data-title-candidate="${esc(item.title)}"><b>${index + 1}</b><span>${esc(item.title)}</span><small>${esc(item.rationale || '内容钩子')}</small></button>`).join('');
-  return `<div class="title-ai-summary"><b>标题分析摘要（参考）</b><span>${esc(plan.summary || '')}</span></div><div class="title-ai-candidates">${candidates}</div><small class="title-ai-note">${esc(plan.note || '标题仅基于文章内容生成，发布前请人工核对。')}</small>`;
+  return `${coreMarkup}<div class="title-ai-summary"><b>标题分析摘要（参考）</b><span>${esc(plan.summary || '')}</span></div><div class="title-ai-candidates">${candidates}</div><small class="title-ai-note">${esc(plan.note || '标题仅基于文章内容生成，发布前请人工核对。')}</small>`;
 }
 
 function renderCoverSummaryPanel() {
@@ -114,7 +196,9 @@ function renderCoverSummaryPanel() {
   const statusText = cover
     ? `${coverCheck?.fields.width || 0}×${coverCheck?.fields.height || 0} · 主文案 ${(coverCheck?.fields.mainChars || 0)}/${WECHAT_LIMITS.titleImage.mainChars} · 副文案 ${(coverCheck?.fields.subChars || 0)}/${WECHAT_LIMITS.titleImage.subChars}`
     : '尚未设置封面；公众号草稿必须有头条封面图';
-  return `<section class="cover-summary-panel"><div class="cover-summary-head"><div><h3>公众号封面与内容摘要</h3><span>独立设置区 · 按公众号字段 1:1 复刻并同步右侧预览</span></div><button id="coverAutoBtn" type="button" class="primary-button" title="优先复用素材库封面；缺少合规封面时生成可替换候选，并同步封面文案与内容摘要">封面一键设置</button></div><div class="cover-summary-grid"><div class="cover-slot">${cover?.dataUrl ? `<img src="${cover.dataUrl}" alt="${esc(cover.alt || '公众号封面')}">` : '<div class="cover-slot-empty">封面图片<br>900×383</div>'}<span>头条封面 · 900×383</span></div><div class="cover-summary-fields"><label>封面素材<select id="coverAssetSelect">${coverOptions}</select></label><div class="cover-copy-row"><label>封面主文案<input id="coverMainInput" maxlength="${WECHAT_LIMITS.titleImage.mainChars}" value="${esc(cover?.coverMain || doc.title || '')}" placeholder="最多 10 字"></label><label>封面副文案<input id="coverSubInput" maxlength="${WECHAT_LIMITS.titleImage.subChars}" value="${esc(cover?.coverSub || doc.subtitle || '')}" placeholder="最多 14 字"></label></div><label>内容摘要<textarea id="subtitleInput" maxlength="${WECHAT_LIMITS.digestChars}" rows="2" placeholder="最多 128 字">${esc(doc.subtitle || '')}</textarea></label><div class="cover-summary-meta"><span>${esc(statusText)}</span><span>摘要 ${(doc.subtitle || '').length}/${WECHAT_LIMITS.digestChars} 字</span></div></div></div></section>`;
+  const core = doc.meta?.visualPlan?.coreContent;
+  const coreMarkup = core?.summary ? `<div class="core-content-summary"><b>核心提炼</b><span>${esc(core.summary)}</span></div>` : '';
+  return `<section class="cover-summary-panel"><div class="cover-summary-head"><div><h3>公众号封面与内容摘要</h3><span>独立设置区 · 按公众号字段 1:1 复刻并同步右侧预览</span></div><div class="cover-summary-actions"><button id="titleImageAutoBtn" type="button" class="primary-button" title="在本机提炼文章核心内容，并生成一张 900×383 标题图片">提炼核心并生成标题图</button><button id="coverAutoBtn" type="button" title="优先复用素材库封面；缺少合规封面时生成可替换候选">封面一键设置</button></div></div>${coreMarkup}<div class="cover-summary-grid"><div class="cover-slot">${cover?.dataUrl ? `<img src="${cover.dataUrl}" alt="${esc(cover.alt || '公众号封面')}">` : '<div class="cover-slot-empty">封面图片<br>900×383</div>'}<span>头条封面 · 900×383</span></div><div class="cover-summary-fields"><label>封面素材<select id="coverAssetSelect">${coverOptions}</select></label><div class="cover-copy-row"><label>封面主文案<input id="coverMainInput" maxlength="${WECHAT_LIMITS.titleImage.mainChars}" value="${esc(cover?.coverMain || doc.title || '')}" placeholder="最多 10 字"></label><label>封面副文案<input id="coverSubInput" maxlength="${WECHAT_LIMITS.titleImage.subChars}" value="${esc(cover?.coverSub || doc.subtitle || '')}" placeholder="最多 14 字"></label></div><label>内容摘要<textarea id="subtitleInput" maxlength="${WECHAT_LIMITS.digestChars}" rows="2" placeholder="最多 128 字">${esc(doc.subtitle || '')}</textarea></label><div class="cover-summary-meta"><span>${esc(statusText)}</span><span>摘要 ${(doc.subtitle || '').length}/${WECHAT_LIMITS.digestChars} 字</span></div></div></div></section>`;
 }
 
 function renderGrowthPanel() {
@@ -171,7 +255,7 @@ function render() {
   <div class="shell theme-${normalizeTheme(doc.theme)}">
     <header class="topbar">
       <div><strong>公众号排版</strong><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
-        <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button>
+        <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
         <button id="visualComposeBtn" title="根据文章语义生成标题图，并把素材/创意图放到合适章节">智能配图与标题</button><button id="assetAutoFillBtn" title="识别图片内容（文件名、描述、OCR/视觉标签）并匹配正文章节">图片智能导入</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
       </div>
@@ -179,6 +263,7 @@ function render() {
     <main class="workspace">
       <aside class="panel left-panel">
         <section class="library-section"><div id="libraryPane">${renderLibraryPane()}</div></section>
+        <div id="articleHistoryPane">${renderArticleHistory()}</div>
         ${renderGrowthPanel()}
         <section class="outline-section"><div class="section-head"><h3>文章结构</h3><span class="hint">${doc.blocks.length} 个区块</span></div><div class="outline">${doc.blocks.map((b,i)=>`<button class="outline-item ${b.id===selectedId?'active':''}" data-select="${b.id}"><span>${i+1}</span>${b.type==='image'?'图片':esc(b.text.slice(0,18)||'空内容')}</button>`).join('')}</div></section>
         <section><h3>版本记录</h3><div class="versions">${store.list().slice(-8).reverse().map(v=>`<div><b>#${v.seq}</b><span>${esc(v.label)}</span><time>${new Date(v.ts).toLocaleTimeString()}</time></div>`).join('')}</div></section>
@@ -244,7 +329,7 @@ function renderEditorBlock(b) {
     return `<div class="block ${b.id===selectedId?'selected':''}" data-block="${b.id}"><div class="special-label">媒体 · ${esc(b.mediaType || 'video')}</div><div class="editable block-media" contenteditable="true" spellcheck="false" data-component-edit="${b.id}">${esc(b.text)}</div><div class="hint">${esc(b.url || '未设置媒体地址')}</div><div class="block-tools"><button data-move="-1">↑</button><button data-move="1">↓</button><button data-delete>删除</button></div></div>`;
   }
   const cls = b.type === 'heading' ? 'block-heading' : b.type === 'quote' ? 'block-quote' : 'block-paragraph';
-  return `<div class="block ${b.id===selectedId?'selected':''}" data-block="${b.id}"><div class="editable ${cls}" contenteditable="true" spellcheck="false" data-edit="${b.id}">${esc(b.text)}</div><div class="block-tools"><button data-move="-1">↑</button><button data-move="1">↓</button><button data-delete>删除</button></div></div>`;
+  return `<div class="block ${b.id===selectedId?'selected':''}" data-block="${b.id}"><div class="editable ${cls}" contenteditable="true" spellcheck="false" data-edit="${b.id}">${renderInlineEmphasis(b.text, b.emphasisRanges)}</div><div class="block-tools"><button data-move="-1">↑</button><button data-move="1">↓</button><button data-delete>删除</button></div></div>`;
 }
 
 function renderPreview() {
@@ -485,6 +570,12 @@ function bindLibraryEvents() {
   const copyScript = document.querySelector('[data-copy-script]');
   if (copyScript) copyScript.onclick = async () => { const source = doc.original?.text || ''; try { await navigator.clipboard.writeText(source); setStatus('文字稿已复制'); } catch { setStatus('复制失败，请手动选择文字稿'); } };
 }
+function bindArticleHistoryEvents() {
+  const save = document.querySelector('#saveArticleBtn');
+  if (save) save.onclick = saveCurrentArticle;
+  document.querySelectorAll('[data-restore-article]').forEach(el => el.onclick = () => restoreSavedArticle(el.dataset.restoreArticle));
+  document.querySelectorAll('[data-delete-article]').forEach(el => el.onclick = event => { event.stopPropagation(); deleteSavedArticle(el.dataset.deleteArticle); });
+}
 
 function bindEvents() {
   document.querySelectorAll('[data-select]').forEach(el=>el.onclick=()=>{selectedId=el.dataset.select; render();});
@@ -527,6 +618,7 @@ function bindEvents() {
   document.querySelector('#draftBtn').onclick=openDraftDialog;
   document.querySelector('#visualComposeBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,titleMode:'viral'},'智能配图与标题');
   document.querySelector('#coverAutoBtn').onclick=()=>commit({type:'smartCover'},'封面一键设置');
+  document.querySelector('#titleImageAutoBtn').onclick=()=>commit({type:'generateTitleImage'},'提炼核心并生成标题图');
   document.querySelector('#assetAutoFillBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:false,maxGenerated:0,fillUnmatched:true,titleMode:'safe'},'图片智能导入');
   document.querySelector('#wechatCheckBtn').onclick=runWechatCheck;
   document.querySelector('#wechatOptimizeBtn').onclick=()=>autoRepairWechatConstraints('智能优化微信发布约束').then(() => {
@@ -540,6 +632,7 @@ function bindEvents() {
   document.querySelector('#localDraftBtn').onclick=()=>{exportDraftBundle();document.querySelector('#draftDialog')?.close();};
   document.querySelector('#submitDraftBtn').onclick=submitDraftToWechat;  document.querySelector('#exportHtmlBtn').onclick=exportHtml;
   document.querySelector('#articleImportInput').onchange=e=>handleArticleImport(e.target.files);
+  document.querySelector('#clearArticleBtn').onclick=clearCurrentArticle;
   const drop = document.querySelector('#importDrop');
   drop.onclick=()=>document.querySelector('#articleImportInput').click();
   drop.ondragover=e=>{e.preventDefault();drop.classList.add('dragging');};
@@ -547,6 +640,7 @@ function bindEvents() {
   drop.ondrop=e=>{e.preventDefault();drop.classList.remove('dragging');const files=e.dataTransfer.files;if(files.length)handleArticleImport(files);else{const text=e.dataTransfer.getData('text/plain');if(text)handleArticleImport([],text);}};
   document.querySelectorAll('[data-guidance]').forEach(el=>el.onclick=()=>{const input=document.querySelector('#commandInput');input.value=el.dataset.guidance;input.focus();});
   bindLibraryEvents();
+  bindArticleHistoryEvents();
   const growthAnalyzeButton = document.querySelector('#growthAnalyze');
   if (growthAnalyzeButton) growthAnalyzeButton.onclick = () => {
     growthProfile = normalizeGrowthProfile({
@@ -708,7 +802,7 @@ async function handleArticleImport(fileList=[], pastedText=''){
     const assets=mergeAssets(loadAssetLibrary(), newAssets);
     const incoming=importArticle({text,filename:articleFile?.name||'pasted-article.txt',assets,autoCompose:true,visualOptions:{generate:true,maxGenerated:3,titleMode:'viral',forceTitle:true}});
     if(extracted.warnings?.length) incoming.meta.importWarnings=[...(incoming.meta.importWarnings||[]),...extracted.warnings.map(item=>`本地 ${extracted.kind?.toUpperCase()||'文档'} 识别提示：${item}`)];
-    if(commit({type:'replaceDocument',doc:incoming},`自动排版导入：${articleFile?.name||`${assets.length} 张图片`}`)){
+    if(replaceCurrentDocument(incoming,`自动排版导入：${articleFile?.name||`${assets.length} 张图片`}`)){
       const warnings=incoming.meta.importWarnings||[];
       const generated=incoming.meta.visualPlan?.generatedAssetIds?.length||0;
       const reused=Math.max(0,assets.length-newAssets.length);
@@ -720,7 +814,7 @@ async function handleArticleImport(fileList=[], pastedText=''){
 window.wechatLayoutHarness = {  getState: () => structuredClone(doc),
   applyIntent: (intent, label='Harness 编辑') => commit(intent, label),
   applyText: (text) => commit(parseCommand(text), `Harness：${text.slice(0,24)}`),
-  importArticle: ({text,filename='pasted-article.txt',assets=[]}) => { const incoming=importArticle({text,filename,assets:mergeAssets(loadAssetLibrary(), assets),autoCompose:true,visualOptions:{generate:true,maxGenerated:3,titleMode:'viral',forceTitle:true}}); const changed=commit({type:'replaceDocument',doc:incoming},`Harness 导入：${filename}`); return changed ? {doc:structuredClone(doc),guidance:getLayoutGuidance(doc)} : null; },
+  importArticle: ({text,filename='pasted-article.txt',assets=[]}) => { const incoming=importArticle({text,filename,assets:mergeAssets(loadAssetLibrary(), assets),autoCompose:true,visualOptions:{generate:true,maxGenerated:3,titleMode:'viral',forceTitle:true}}); const changed=replaceCurrentDocument(incoming,`Harness 导入：${filename}`); return changed ? {doc:structuredClone(doc),guidance:getLayoutGuidance(doc)} : null; },
   autoComposeVisuals: (options={}) => commit({type:'autoComposeVisuals',generate:options.generate !== false,maxGenerated:options.maxGenerated ?? 3,titleMode:options.titleMode || 'viral',forceTitle:options.forceTitle === true,fillUnmatched:options.fillUnmatched === true}, options.fillUnmatched ? '图片智能导入' : '智能配图与标题'),
   coverSet: () => commit({type:'smartCover'}, '封面一键设置'),
   smartCover: () => commit({type:'smartCover'}, '封面一键设置'),

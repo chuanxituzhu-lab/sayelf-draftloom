@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoComposeDocument, deriveArticleTitle, extractKeywords, generateViralTitlePlan, planVisualLayout, recognizeAssetContent, renderCreativeSvg } from '../src/visuals.js';
+import { autoComposeDocument, deriveArticleTitle, extractCoreContent, extractKeywords, generateViralTitlePlan, planVisualLayout, recognizeAssetContent, renderCreativeSvg } from '../src/visuals.js';
 import { importArticle, parseCommand } from '../src/core.js';
 
 test('natural language command exposes smart visual composition', () => {
@@ -26,6 +26,17 @@ test('viral title plan summarizes the article and stays within the WeChat title 
   assert.ok(plan.candidates.length >= 3);
   assert.ok(plan.candidates.every(item => [...item.title].length <= 32));
   assert.equal(plan.selected, plan.candidates[0].title);
+});
+
+test('core extraction selects signal-bearing sentences and keeps reviewable points', () => {
+  const core = extractCoreContent({
+    text: '开头铺垫内容。AI 可以降低制作成本，但真正稀缺的是 Idea 的价值。执行决定结果，持续输出才能获得反馈。',
+    max: 96,
+    maxPoints: 3
+  });
+  assert.match(core.summary, /AI 可以降低制作成本/);
+  assert.ok(core.points.some(point => point.includes('执行决定结果')));
+  assert.equal(core.source, 'local-deterministic');
 });
 
 test('keyword extraction is deterministic and useful for semantic image matching', () => {

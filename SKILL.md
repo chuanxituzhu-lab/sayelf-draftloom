@@ -20,6 +20,9 @@ git clone https://github.com/chuanxituzhu-lab/sayelf-draftloom.git ~/.workbuddy/
 
 - 用户要求排版微信公众号文章、美化公众号稿件
 - 导入 Markdown/TXT/DOCX/PDF 与图片，生成公众号文章
+- 清空当前文章并重新上传；自动保留最近 12 篇文章记录，支持打开或删除
+- 自动局部重点标注：识别重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号，只对对应文字加粗或加浅色标记
+- 一键提炼核心内容并在本机生成一张 900×383 标题图片，文案可继续人工修改
 - 导出微信兼容 HTML 或生成本地交付包
 - 去除文本 AI 味、切换文章主题
 
@@ -48,7 +51,7 @@ npm run cli -- publish --out .local-data/publish/latest  # 生成本地交付包
 npm start   # 浏览器打开 http://127.0.0.1:4173
 ```
 
-页面提供左右分栏编辑与微信实时预览，支持 Markdown/TXT/DOCX/PDF + 多图片拖放导入；DOCX/PDF 仅在本机识别，原稿保留用于回滚。
+页面提供左右分栏编辑与微信实时预览，支持 Markdown/TXT/DOCX/PDF + 多图片拖放导入；DOCX/PDF 仅在本机识别，原稿保留用于回滚。换稿前会自动保存当前文章，也可以在“文章记录”中手动保存、打开或删除最近 12 篇文章。
 
 ### MCP
 
