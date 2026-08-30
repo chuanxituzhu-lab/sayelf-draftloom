@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoComposeDocument, deriveArticleTitle, deriveImageBudget, extractCoreContent, extractKeywords, generateViralTitlePlan, planVisualLayout, recognizeAssetContent, renderCreativeSvg } from '../src/visuals.js';
+import { autoComposeDocument, deriveArticleTitle, deriveImageBudget, evaluateHotTopicFit, extractCoreContent, extractKeywords, generateArticleKeywords, generateViralTitlePlan, planVisualLayout, recognizeAssetContent, renderCreativeSvg } from '../src/visuals.js';
 import { importArticle, parseCommand } from '../src/core.js';
 
 test('natural language command exposes smart visual composition', () => {
@@ -43,6 +43,39 @@ test('keyword extraction is deterministic and useful for semantic image matching
   const keywords = extractKeywords('山野茶 山野茶 自然生活与真实体验');
   assert.ok(keywords.includes('山野茶'));
   assert.ok(keywords.length <= 8);
+});
+
+test('article keyword plan returns deduplicated copy-ready hashtags', () => {
+  const plan = generateArticleKeywords({
+    title: '山野茶与自然生活',
+    text: '山野茶来自真实的自然生活。山野茶需要耐心冲泡，也需要尊重季节。'
+  });
+  assert.ok(plan.keywords.includes('山野茶'));
+  assert.equal(plan.keywords.length, new Set(plan.keywords).size);
+  assert.equal(plan.hashtags.length, plan.keywords.length);
+  assert.equal(plan.text, plan.hashtags.join(' '));
+  assert.ok(plan.hashtags.every(tag => /^#[\u4e00-\u9fffA-Za-z0-9_-]+$/.test(tag)));
+  assert.equal(plan.source, 'local-deterministic');
+});
+
+test('hot topic fit stays evidence-bound and distinguishes direct from weak matches', () => {
+  const direct = evaluateHotTopicFit({
+    title: 'AI 如何改变内容创作',
+    text: 'AI 可以降低内容制作成本，但作者仍需保留自己的判断和执行。',
+    hotTopics: '#AI\n#旅游消费'
+  });
+  assert.equal(direct.verified, true);
+  assert.equal(direct.level, 'strong');
+  assert.ok(direct.matchedTopics.includes('AI'));
+  assert.match(direct.note, /正文/);
+
+  const spacedTags = evaluateHotTopicFit({ title: 'AI 内容创作', text: 'AI 帮助作者提高效率。', hotTopics: '#AI #旅游消费' });
+  assert.equal(spacedTags.matchedTopics.includes('AI'), true);
+
+  const unknown = evaluateHotTopicFit({ title: '山野茶日记', text: '记录一杯茶和自然生活。' });
+  assert.equal(unknown.verified, false);
+  assert.equal(unknown.level, 'unknown');
+  assert.equal(unknown.decision, '待核验实时热榜');
 });
 
 test('image recognition uses vision metadata and exposes semantic labels', () => {

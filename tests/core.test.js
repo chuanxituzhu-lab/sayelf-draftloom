@@ -182,6 +182,16 @@ test('智能优化同步封面文案，并在预览中单独显示封面与内�
   assert.equal((preview.match(/封面/g) || []).length >= 1, true);
 });
 
+test('文章预览和微信 HTML 在正文末尾罗列自动关键词标签', () => {
+  const doc = importArticle({ text: '# AI 内容创作\n\nAI 可以降低内容创作成本，持续执行才能获得反馈。' });
+  const preview = renderDocumentBody(doc);
+  const html = renderArticleHtml(doc);
+  assert.match(preview, /data-article-hashtags="true"/);
+  assert.match(preview, /#AI/);
+  assert.match(html, /data-article-hashtags="true"/);
+  assert.match(html, /关键词标签/);
+});
+
 test('asset library supports batch upload and replacing the selected image', () => {
   let doc = createInitialDocument();
   const first = {id:'a1',name:'first.png',type:'image/png',size:1,dataUrl:'data:image/png;base64,AA==',alt:'first'};

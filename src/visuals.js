@@ -12,7 +12,7 @@ const DEFAULT_SUBTITLE = '自动排版草稿 · 可继续人工编辑';
 const STOP_WORDS = new Set([
   '我们', '你们', '他们', '这个', '那个', '这些', '那些', '可以', '进行', '一个', '一种', '因为', '所以',
   '如果', '已经', '通过', '内容', '文章', '然后', '以及', '关于', '什么', '如何', '就是', '自己', '没有',
-  '图片', '图像', '素材', '章节', '部分', '第一', '第二', '自动', '填充',
+  '图片', '图像', '素材', '章节', '部分', '第一', '第二', '自动', '填充', '以后', '为什么', '很多人', '这一点', '别人', '还是',
   'with', 'from', 'that', 'this', 'the', 'and', 'for', 'are', 'you', 'your'
 ]);
 const CORE_SIGNAL_TERMS = Object.freeze(['本质', '核心', '关键', '重要', '所以', '因此', '真正', '价值', '方法', '执行', '意味着', '结论', '不是', 'AI']);
@@ -59,6 +59,125 @@ export function extractKeywords(text = '', max = 8) {
     .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length || a[0].localeCompare(b[0]))
     .slice(0, max)
     .map(([word]) => word);
+}
+
+function normalizeHashtag(value = '') {
+  const normalized = clean(String(value).replace(/^#+/, ''))
+    .replace(/[^\u4e00-\u9fffA-Za-z0-9_-]/g, '')
+    .trim();
+  if (!normalized || normalized.length < 2 || STOP_WORDS.has(normalized.toLowerCase())) return '';
+  return normalized;
+}
+
+/**
+ * Builds customer-facing article keywords and copy-ready hashtags locally.
+ * The result is a recommendation, not a claim about the article's facts.
+ */
+export function generateArticleKeywords({ title = '', text = '', existingKeywords = [], max = 8 } = {}) {
+  const source = `${title}\n${text}`;
+  const extracted = extractKeywords(source, Math.max(12, Number(max) * 2 || 16));
+  const provided = Array.isArray(existingKeywords) ? existingKeywords : [];
+  const titleTerms = String(title).match(/[\u4e00-\u9fff]{2,12}|[a-z][a-z0-9-]{2,}/gi) || [];
+  const shortEnglishTerms = source.match(/\b[A-Z]{2,}\b/g) || [];
+  const candidates = [...titleTerms, ...shortEnglishTerms, ...provided, ...extracted]
+    .map(normalizeHashtag)
+    .filter(Boolean);
+  const sourceLower = source.toLowerCase();
+  const keywords = [...new Set(candidates)]
+    .sort((a, b) => {
+      const aHits = sourceLower.split(a.toLowerCase()).length - 1;
+      const bHits = sourceLower.split(b.toLowerCase()).length - 1;
+      return bHits - aHits || b.length - a.length || a.localeCompare(b);
+    })
+    .slice(0, Math.max(1, Math.min(12, Number(max) || 8)));
+  return {
+    keywords,
+    hashtags: keywords.map(keyword => `#${keyword}`),
+    text: keywords.map(keyword => `#${keyword}`).join(' '),
+    source: 'local-deterministic',
+    generatedAt: new Date().toISOString()
+  };
+}
+
+const HOT_TOPIC_RULES = Object.freeze([
+  { label: '人工智能与工具', terms: ['ai', '人工智能', '大模型', '智能体', '生成式', '自动化', 'skill'] },
+  { label: '内容创作与平台', terms: ['内容', '创作', '自媒体', '短视频', '平台', '标题', '脚本', '作品', 'idea'] },
+  { label: '教育与职业', terms: ['教育', '学习', '课程', '老师', '就业', '职场', '职业', '技能'] },
+  { label: '心理与成长', terms: ['心理', '情绪', '成长', '关系', '亲子', '沟通', '自我'] },
+  { label: '科技与产业', terms: ['科技', '数据', '汽车', '芯片', '机器人', '产业', '产品'] },
+  { label: '生活方式', terms: ['生活', '自然', '健康', '旅行', '茶', '美食', '消费'] }
+]);
+
+function escapeRegExp(value = '') { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function hasTopicTerm(text = '', term = '') {
+  const value = String(text).toLowerCase();
+  const candidate = String(term).toLowerCase();
+  if (!candidate) return false;
+  if (/^[a-z0-9-]+$/i.test(candidate)) return new RegExp(`\\b${escapeRegExp(candidate)}\\b`, 'i').test(value);
+  return value.includes(candidate);
+}
+function parseHotTopics(value) {
+  const values = Array.isArray(value) ? value : String(value || '').split(/[,，、;；\n|]+|(?=#)/);
+  return [...new Set(values.map(item => clean(String(item).replace(/^#+/, '').replace(/[“”"'`]/g, ''))).filter(Boolean))].slice(0, 30);
+}
+
+/**
+ * Evaluates whether article keywords can be connected to a user-provided
+ * hot-topic list. Without that list it deliberately reports an unverified
+ * local semantic hint instead of pretending to know a live hot search.
+ */
+export function evaluateHotTopicFit({ title = '', text = '', keywords = [], hotTopics = [], max = 8 } = {}) {
+  const plan = generateArticleKeywords({ title, text, existingKeywords: keywords, max });
+  const source = `${title}\n${text}`;
+  const topics = parseHotTopics(hotTopics);
+  const articleRules = HOT_TOPIC_RULES.filter(rule => rule.terms.some(term => hasTopicTerm(source, term)));
+  const directHotTopics = topics.filter(topic => hasTopicTerm(source, topic));
+  const assessments = plan.keywords.map(keyword => {
+    const keywordLower = keyword.toLowerCase();
+    const exactTopics = topics.filter(topic => {
+      const topicLower = topic.toLowerCase();
+      return topicLower.includes(keywordLower) || keywordLower.includes(topicLower);
+    });
+    const keywordRules = HOT_TOPIC_RULES.filter(rule => rule.terms.some(term => hasTopicTerm(keyword, term)));
+    const relatedTopics = topics.filter(topic => keywordRules.some(rule => rule.terms.some(term => hasTopicTerm(topic, term))));
+    if (!topics.length) return { keyword, relation: 'unknown', label: '待核验', advice: '尚未提供实时热词，先按文章主题保留。', relatedTopics: [] };
+    if (exactTopics.length) return { keyword, relation: 'strong', label: '强关联', advice: '可以合理借势，但正文要有对应事实或观点。', relatedTopics: exactTopics };
+    if (relatedTopics.length) return { keyword, relation: 'adjacent', label: '可借势', advice: '有主题交集，建议从文章自身观点切入，不要硬塞热词。', relatedTopics };
+    return { keyword, relation: 'weak', label: '不建议', advice: '正文缺少直接支撑，不建议为了热点强行添加。', relatedTopics: [] };
+  });
+  const matchedTopics = [...new Set([...directHotTopics, ...assessments.flatMap(item => item.relatedTopics)])];
+  const strongCount = assessments.filter(item => item.relation === 'strong').length + directHotTopics.length;
+  const adjacentCount = assessments.filter(item => item.relation === 'adjacent').length;
+  let level = 'unknown';
+  let decision = '待核验实时热榜';
+  let note = articleRules.length
+    ? `文章包含${articleRules.map(rule => rule.label).join('、')}等主题信号；粘贴今日热词后再判断是否适合借势。`
+    : '当前只按文章语义生成关键词，尚未核验实时热榜，不把泛词当成热点。';
+  if (topics.length && strongCount) {
+    level = 'strong';
+    decision = '可合理借势';
+    note = `已发现 ${matchedTopics.length} 个有主题交集的热词，建议围绕正文已有事实或观点展开，不为蹭热点改写内容。`;
+  } else if (topics.length && adjacentCount) {
+    level = 'adjacent';
+    decision = '谨慎借势';
+    note = '文章与输入热词存在主题交集，但不是直接关联；建议明确切入角度后再使用。';
+  } else if (topics.length) {
+    level = 'weak';
+    decision = '不建议硬蹭';
+    note = '当前文章关键词与输入热词缺少直接支撑，不建议为了流量强行添加。';
+  }
+  return {
+    ...plan,
+    hotTopics: topics,
+    verified: topics.length > 0,
+    level,
+    decision,
+    score: topics.length ? Math.min(100, strongCount * 25 + adjacentCount * 12) : null,
+    matchedTopics,
+    articleTopics: articleRules.map(rule => rule.label),
+    assessments,
+    note
+  };
 }
 
 function articleSource(doc = {}) {
@@ -345,7 +464,8 @@ function scoreAsset(asset, anchorText, keywords) {
 export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = true, fillUnmatched = false, autoImageCount = false, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages } = {}) {
   const blocks = doc.blocks || [];
   const assets = doc.assets || [];
-  const keywords = extractKeywords(`${doc.title || ''}\n${articleSource(doc)}`, 8);
+  const keywordPlan = generateArticleKeywords({ title: doc.title || '', text: articleSource(doc), max: 8 });
+  const keywords = keywordPlan.keywords;
   const imageBudget = deriveImageBudget(doc, { includeCover, maxBodyImages });
   const assetAnalyses = assets.map(asset => ({ id: asset.id, name: asset.name, ...recognizeAssetContent(asset) }));
   const referenced = new Set(blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])]).filter(Boolean));
@@ -418,6 +538,7 @@ export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = tr
   if (includeCover && !coverAsset) suggestions.unshift('建议生成一张标题封面图，首图将用于公众号草稿封面');
   return {
     keywords,
+    hashtags: keywordPlan.hashtags,
     assetAnalyses,
     recognition: { version: 1, mode: 'local-metadata-with-vision-adapter-seam' },
     imageBudget: {
@@ -627,6 +748,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
       coverAssetId,
       generatedAssetIds: [...new Set(generatedAssetIds)],
       placements: plan.sectionPlacements,
+      hashtags: plan.hashtags || generateArticleKeywords({ title: next.title, text: source, existingKeywords: plan.keywords, max: 8 }).hashtags,
       suggestions: plan.suggestions.filter(item => !(coverAssetId && item.includes('标题封面图'))),
       provider: generate ? 'local-svg-fallback' : 'planning-only'
     },

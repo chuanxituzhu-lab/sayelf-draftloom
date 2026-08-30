@@ -1,4 +1,4 @@
-import { autoComposeDocument, createCreativeAsset, generateViralTitlePlan, planVisualLayout, summarizeArticle } from './visuals.js';
+import { autoComposeDocument, createCreativeAsset, generateArticleKeywords, generateViralTitlePlan, planVisualLayout, summarizeArticle } from './visuals.js';
 import { WECHAT_LIMITS, inspectWechatArticle, charCount, truncateByChars } from './wechat-limits.js';
 import { applyArticleEmphasis, sanitizeImportedDocument } from './document-import.js';
 
@@ -1098,6 +1098,24 @@ function getCoverCopy(doc = {}, asset = null) {
   };
 }
 
+function articleKeywordSource(doc = {}) {
+  const blocks = (doc.blocks || [])
+    .filter(block => block.type !== 'image')
+    .map(block => block.text || (Array.isArray(block.items) ? block.items.join('；') : '') || (Array.isArray(block.rows) ? block.rows.flat().join('；') : ''))
+    .filter(Boolean);
+  return blocks.join('\n') || doc.original?.text || '';
+}
+
+function renderArticleHashtags(doc = {}, styles = null) {
+  const hashtags = generateArticleKeywords({ title: doc.title || '', text: articleKeywordSource(doc), max: 8 }).hashtags;
+  if (!hashtags.length) return '';
+  const tags = hashtags.map(tag => styles?.tag
+    ? `<span style="${styles.tag}">${escapeHtml(tag)}</span>`
+    : `<span>${escapeHtml(tag)}</span>`).join(styles ? ' ' : ' ');
+  if (styles) return `<p style="${styles.container}" class="article-hashtags" data-article-hashtags="true"><span style="${styles.label}">关键词标签</span><span style="${styles.list}">${tags}</span></p>`;
+  return `<p class="article-hashtags" data-article-hashtags="true"><span class="article-hashtags-label">关键词标签</span><span class="article-hashtags-list">${tags}</span></p>`;
+}
+
 export function renderDocumentBody(doc) {
   const assets = doc.assets || [];
   const assetById = id => assets.find(asset => asset.id === id);
@@ -1134,7 +1152,7 @@ export function renderDocumentBody(doc) {
     return `<p>${text}</p>`;
   };
   const summary = `<p class="subtitle wechat-summary" data-wechat-summary="true"><span class="summary-label">内容摘要</span><span class="summary-text">${escapeHtml(doc.subtitle || '')}</span></p>`;
-  return `${coverMarkup}<h1>${escapeHtml(doc.title)}</h1><div class="meta">${escapeHtml(doc.author || '公众号排版')} · ${doc.meta?.updatedAt ? new Date(doc.meta.updatedAt).toLocaleDateString() : ''}</div>${summary}${(doc.blocks || []).map(renderBlock).join('')}`;
+  return `${coverMarkup}<h1>${escapeHtml(doc.title)}</h1><div class="meta">${escapeHtml(doc.author || '公众号排版')} · ${doc.meta?.updatedAt ? new Date(doc.meta.updatedAt).toLocaleDateString() : ''}</div>${summary}${(doc.blocks || []).map(renderBlock).join('')}${renderArticleHashtags(doc)}`;
 }
 
 export function renderArticleHtml(doc) {
@@ -1171,7 +1189,10 @@ export function renderArticleHtml(doc) {
     galleryImage: 'width:100%;aspect-ratio:1;object-fit:cover;border-radius:4px;',
     media: `display:flex;gap:10px;align-items:center;padding:14px;margin:18px 0;background:${theme.surface};border-radius:8px;`,
     mediaLink: `color:${theme.accent};`,
-    missing: 'padding:20px;background:#fff3f3;color:#b42318;'
+    missing: 'padding:20px;background:#fff3f3;color:#b42318;',
+    hashtags: 'margin:26px 0 0;padding:12px 14px;border-top:1px solid #dfe7ee;font-size:13px;line-height:1.8;color:#617180;',
+    hashtagsLabel: `display:block;margin-bottom:3px;font-size:11px;font-weight:700;color:${theme.accent};`,
+    hashtag: `display:inline-block;margin:0 6px 4px 0;color:${theme.accent};`
   };
   const assets = doc.assets || [];
   const assetById = id => assets.find(asset => asset.id === id);
@@ -1207,7 +1228,7 @@ export function renderArticleHtml(doc) {
     }
     return `<p style="${styles.paragraph}">${text}</p>`;
   };
-  const body = `${coverMarkup}<h1 style="${styles.title}">${escapeHtml(doc.title)}</h1><div style="${styles.meta}">${escapeHtml(doc.author || '公众号排版')} · ${doc.meta?.updatedAt ? new Date(doc.meta.updatedAt).toLocaleDateString() : ''}</div><p style="${styles.summary}" data-wechat-summary="true"><span style="${styles.summaryLabel}">内容摘要</span><span>${escapeHtml(doc.subtitle || '')}</span></p>${(doc.blocks || []).map(renderInlineBlock).join('')}`;
+  const body = `${coverMarkup}<h1 style="${styles.title}">${escapeHtml(doc.title)}</h1><div style="${styles.meta}">${escapeHtml(doc.author || '公众号排版')} · ${doc.meta?.updatedAt ? new Date(doc.meta.updatedAt).toLocaleDateString() : ''}</div><p style="${styles.summary}" data-wechat-summary="true"><span style="${styles.summaryLabel}">内容摘要</span><span>${escapeHtml(doc.subtitle || '')}</span></p>${(doc.blocks || []).map(renderInlineBlock).join('')}${renderArticleHashtags(doc, { container: styles.hashtags, label: styles.hashtagsLabel, list: '', tag: styles.hashtag })}`;
   return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(doc.title)}</title><article class="wechat-article" style="${styles.article}">${body}</article>`;
 }
 

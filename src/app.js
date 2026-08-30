@@ -4,11 +4,13 @@ import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, formatBytes } 
 import { APP_VERSION } from './version.js';
 import { applyArticleEmphasis, getArticleFileKind, isSupportedArticleFile } from './document-import.js';
 import { MAX_ARTICLE_HISTORY, removeArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from './article-history.js';
+import { evaluateHotTopicFit } from './visuals.js';
 
 const STORAGE_KEY = 'wechat-layout-mvp:v0.1';
 const ASSET_LIBRARY_KEY = 'wechat-layout-mvp:asset-library:v0.1';
 const GROWTH_PROFILE_KEY = 'wechat-layout-mvp:growth-profile:v0.1';
 const ARTICLE_HISTORY_KEY = 'wechat-layout-mvp:article-history:v1';
+const HOT_TOPICS_KEY = 'wechat-layout-mvp:hot-topics:v1';
 const MAX_ASSETS = 200;
 let doc = loadDocument() || { ...createInitialDocument(), assets: loadAssetLibrary() };
 let articleHistory = loadArticleHistory();
@@ -27,6 +29,7 @@ let growthReport = null;
 let lastWechatCheck = null;
 let autoGuidance = null;
 let draggedAssetId = null;
+let hotTopicsText = loadHotTopics();
 let previewCoverAsset = null;
 let previewCoverSource = '';
 let previewCoverRequest = 0;
@@ -51,6 +54,12 @@ function loadArticleHistory() {
     const value = JSON.parse(localStorage.getItem(ARTICLE_HISTORY_KEY) || '[]');
     return Array.isArray(value) ? value.filter(item => item?.id && item?.doc).slice(0, MAX_ARTICLE_HISTORY) : [];
   } catch { return []; }
+}
+function loadHotTopics() {
+  try { return String(localStorage.getItem(HOT_TOPICS_KEY) || '').trim(); } catch { return ''; }
+}
+function saveHotTopics() {
+  try { localStorage.setItem(HOT_TOPICS_KEY, hotTopicsText); } catch { /* Optional local preference; article editing continues without it. */ }
 }
 function persistArticleHistory() {
   try {
@@ -260,6 +269,25 @@ function renderTitlePlan() {
   return `${coreMarkup}<div class="title-ai-summary"><b>标题分析摘要（参考）</b><span>${esc(plan.summary || '')}</span></div><div class="title-ai-candidates">${candidates}</div><small class="title-ai-note">${esc(plan.note || '标题仅基于文章内容生成，发布前请人工核对。')}</small>`;
 }
 
+function currentKeywordSource() {
+  const blocks = (doc.blocks || [])
+    .filter(block => block.type !== 'image')
+    .map(block => block.text || (Array.isArray(block.items) ? block.items.join('；') : ''))
+    .filter(Boolean);
+  return blocks.join('\n') || doc.original?.text || '';
+}
+
+function renderKeywordPanel() {
+  const assessment = evaluateHotTopicFit({ title: doc.title, text: currentKeywordSource(), hotTopics: hotTopicsText, max: 8 });
+  const plan = assessment;
+  if (!plan.keywords.length) return '<section class="keyword-panel"><div class="keyword-empty">导入文章后，将自动匹配关键词并生成 #标签。</div></section>';
+  const chips = plan.hashtags.map(tag => `<span class="keyword-chip">${esc(tag)}</span>`).join('');
+  const decisionClass = assessment.verified ? `hot-fit-${assessment.level}` : 'hot-fit-unknown';
+  const relationRows = assessment.assessments.slice(0, 4).map(item => `<li><b>${esc(item.keyword)}</b><span class="${decisionClass}">${esc(item.label)}</span><small>${esc(item.advice)}</small></li>`).join('');
+  const matched = assessment.matchedTopics.length ? `<small class="hot-fit-matched">关联热词：${esc(assessment.matchedTopics.slice(0, 3).join('、'))}</small>` : '';
+  return `<section class="keyword-panel"><div class="keyword-panel-head"><div><b>自动关键词</b><small>按当前标题和正文匹配 · 本地生成建议</small></div><button id="copyKeywordsBtn" type="button" data-keywords="${esc(plan.text)}">复制 #关键词</button></div><div class="keyword-chips">${chips}</div><small class="keyword-note">共 ${plan.keywords.length} 个，文章末尾已自动罗列，发布前可按定位人工删改。</small><div class="hot-fit"><div class="hot-fit-head"><b>热点关联评估</b><span class="${decisionClass}">${esc(assessment.decision)}</span></div><p>${esc(assessment.note)}</p>${matched}<ul>${relationRows}</ul><textarea id="hotTopicsInput" aria-label="今日热点词" rows="2" placeholder="可粘贴今日热词，用顿号或换行分隔（可选）">${esc(hotTopicsText)}</textarea></div></section>`;
+}
+
 function renderCoverSummaryPanel() {
   const cover = currentCoverAsset();
   const previewCover = getPreviewCoverAsset(cover);
@@ -374,6 +402,7 @@ function render() {
         <div class="humanizer-box"><div class="command-label">去 AI 味</div><div class="humanizer-row"><select id="humanizerMode"><option value="natural" ${doc.meta.humanizer?.mode === 'natural' ? 'selected' : ''}>自然化</option><option value="conservative" ${doc.meta.humanizer?.mode === 'conservative' ? 'selected' : ''}>保守调整</option></select><button id="humanizeBtn">应用到正文</button></div><div class="hint">本地确定性处理，原稿保存在导入记录中，可随时回滚。</div></div>
         ${renderCoverSummaryPanel()}
         <div class="title-editor"><div class="title-row"><input id="titleInput" maxlength="${WECHAT_LIMITS.titleChars}" value="${esc(doc.title)}" aria-label="标题"><button id="viralTitleBtn" type="button" title="根据正文总结并生成爆款标题">生成爆款标题</button></div><input id="authorInput" maxlength="${WECHAT_LIMITS.authorChars}" value="${esc(doc.author || '')}" aria-label="作者" placeholder="作者（可选，最多 16 字）"><div class="title-ai-panel">${renderTitlePlan()}</div></div>
+        ${renderKeywordPanel()}
         <div class="blocks">${doc.blocks.filter(block => !(block.type === 'image' && block.visualRole === 'cover')).map(renderEditorBlock).join('')}</div>
         <div class="insert-row"><button data-add="heading">+ 标题</button><button data-add="paragraph">+ 段落</button><button data-add="quote">+ 引用</button><button data-add="list">+ 列表</button><button data-add="table">+ 表格</button><button data-add="cta">+ CTA</button><button data-add="gallery">+ 画廊</button><button data-add="media">+ 媒体</button></div>
       </section>
@@ -774,6 +803,19 @@ function bindEvents() {
   document.querySelector('#coverAssetSelect').onchange=e=>commit({type:'setCoverAsset',assetId:e.target.value},'设置公众号封面');
   document.querySelector('#coverMainInput').onchange=e=>{const sub=document.querySelector('#coverSubInput')?.value || '';commit({type:'setCoverCopy',main:e.target.value.trim(),sub},'修改封面主文案');};
   document.querySelector('#coverSubInput').onchange=e=>{const main=document.querySelector('#coverMainInput')?.value || '';commit({type:'setCoverCopy',main,sub:e.target.value.trim()},'修改封面副文案');};
+  const copyKeywordsButton = document.querySelector('#copyKeywordsBtn');
+  if (copyKeywordsButton) copyKeywordsButton.onclick = async () => {
+    const text = copyKeywordsButton.dataset.keywords || '';
+    try { await navigator.clipboard.writeText(text); setStatus('#关键词已复制'); }
+    catch { setStatus('复制失败，请手动选择关键词'); }
+  };
+  const hotTopicsInput = document.querySelector('#hotTopicsInput');
+  if (hotTopicsInput) hotTopicsInput.onchange = event => {
+    hotTopicsText = event.target.value.trim();
+    saveHotTopics();
+    render();
+    setStatus(hotTopicsText ? '已按输入的热点词复核关键词关联度' : '已清除热点词，恢复本地语义判断');
+  };
   document.querySelector('#humanizeBtn').onclick=()=>{const mode=document.querySelector('#humanizerMode').value;commit({type:'humanize',mode},`去 AI 味：${mode==='natural'?'自然化':'保守调整'}`);};
   document.querySelector('#themeSelect').onchange=e=>commit({type:'setTheme',theme:e.target.value},'切换主题');
   document.querySelector('#undoBtn').onclick=()=>{doc=store.undo(doc);persist();render();setStatus('已回滚一步');};
@@ -996,6 +1038,8 @@ window.wechatLayoutHarness = {  getState: () => structuredClone(doc),
   setGrowthProfile: (profile) => { growthProfile = normalizeGrowthProfile(profile); saveGrowthProfile(); growthReport = analyzeGrowth(doc, growthProfile); render(); return structuredClone(growthReport); },
   analyzeGrowth: (profile) => { if (profile) { growthProfile = normalizeGrowthProfile(profile); saveGrowthProfile(); } growthReport = analyzeGrowth(doc, growthProfile); render(); return structuredClone(growthReport); },
   growthBrief: (profile) => growthBrief(doc, normalizeGrowthProfile(profile || growthProfile)),
+  getArticleKeywords: () => structuredClone(evaluateHotTopicFit({ title: doc.title, text: currentKeywordSource(), hotTopics: hotTopicsText, max: 8 })),
+  setHotTopics: (value = '') => { hotTopicsText = String(value).trim(); saveHotTopics(); render(); return structuredClone(evaluateHotTopicFit({ title: doc.title, text: currentKeywordSource(), hotTopics: hotTopicsText, max: 8 })); },
   addImage: ({name,type='image/png',dataUrl,alt=''}) => commit({type:'addAsset',asset:{id:crypto.randomUUID(),name,type,size:0,dataUrl,alt:alt||name}}, `Harness 素材：${name}`),
   replaceSelectedImage: (assetId) => commit({type:'replaceSelectedAsset',assetId}, 'Harness 替换图片'),
   deleteImage: (assetId) => commit({type:'deleteAsset',assetId}, 'Harness 删除素材'),
