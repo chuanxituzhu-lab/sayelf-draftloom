@@ -188,8 +188,10 @@ test('文章预览和微信 HTML 在正文末尾罗列自动关键词标签', ()
   const html = renderArticleHtml(doc);
   assert.match(preview, /data-article-hashtags="true"/);
   assert.match(preview, /#AI/);
+  assert.doesNotMatch(preview, /关键词标签/);
   assert.match(html, /data-article-hashtags="true"/);
-  assert.match(html, /关键词标签/);
+  assert.match(html, /#AI/);
+  assert.doesNotMatch(html, /关键词标签/);
 });
 
 test('asset library supports batch upload and replacing the selected image', () => {

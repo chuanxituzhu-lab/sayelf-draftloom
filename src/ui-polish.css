@@ -453,14 +453,6 @@ input {
   line-height: 1.8;
 }
 
-.wechat-article .article-hashtags-label {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--theme-accent, #07c160);
-  font-size: 11px;
-  font-weight: 700;
-}
-
 .wechat-article .article-hashtags-list {
   display: flex;
   flex-wrap: wrap;

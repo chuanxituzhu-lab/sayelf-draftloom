@@ -1112,8 +1112,8 @@ function renderArticleHashtags(doc = {}, styles = null) {
   const tags = hashtags.map(tag => styles?.tag
     ? `<span style="${styles.tag}">${escapeHtml(tag)}</span>`
     : `<span>${escapeHtml(tag)}</span>`).join(styles ? ' ' : ' ');
-  if (styles) return `<p style="${styles.container}" class="article-hashtags" data-article-hashtags="true"><span style="${styles.label}">关键词标签</span><span style="${styles.list}">${tags}</span></p>`;
-  return `<p class="article-hashtags" data-article-hashtags="true"><span class="article-hashtags-label">关键词标签</span><span class="article-hashtags-list">${tags}</span></p>`;
+  if (styles) return `<p style="${styles.container}" class="article-hashtags" data-article-hashtags="true"><span style="${styles.list}">${tags}</span></p>`;
+  return `<p class="article-hashtags" data-article-hashtags="true"><span class="article-hashtags-list">${tags}</span></p>`;
 }
 
 export function renderDocumentBody(doc) {
@@ -1191,7 +1191,6 @@ export function renderArticleHtml(doc) {
     mediaLink: `color:${theme.accent};`,
     missing: 'padding:20px;background:#fff3f3;color:#b42318;',
     hashtags: 'margin:26px 0 0;padding:12px 14px;border-top:1px solid #dfe7ee;font-size:13px;line-height:1.8;color:#617180;',
-    hashtagsLabel: `display:block;margin-bottom:3px;font-size:11px;font-weight:700;color:${theme.accent};`,
     hashtag: `display:inline-block;margin:0 6px 4px 0;color:${theme.accent};`
   };
   const assets = doc.assets || [];
@@ -1228,7 +1227,7 @@ export function renderArticleHtml(doc) {
     }
     return `<p style="${styles.paragraph}">${text}</p>`;
   };
-  const body = `${coverMarkup}<h1 style="${styles.title}">${escapeHtml(doc.title)}</h1><div style="${styles.meta}">${escapeHtml(doc.author || '公众号排版')} · ${doc.meta?.updatedAt ? new Date(doc.meta.updatedAt).toLocaleDateString() : ''}</div><p style="${styles.summary}" data-wechat-summary="true"><span style="${styles.summaryLabel}">内容摘要</span><span>${escapeHtml(doc.subtitle || '')}</span></p>${(doc.blocks || []).map(renderInlineBlock).join('')}${renderArticleHashtags(doc, { container: styles.hashtags, label: styles.hashtagsLabel, list: '', tag: styles.hashtag })}`;
+  const body = `${coverMarkup}<h1 style="${styles.title}">${escapeHtml(doc.title)}</h1><div style="${styles.meta}">${escapeHtml(doc.author || '公众号排版')} · ${doc.meta?.updatedAt ? new Date(doc.meta.updatedAt).toLocaleDateString() : ''}</div><p style="${styles.summary}" data-wechat-summary="true"><span style="${styles.summaryLabel}">内容摘要</span><span>${escapeHtml(doc.subtitle || '')}</span></p>${(doc.blocks || []).map(renderInlineBlock).join('')}${renderArticleHashtags(doc, { container: styles.hashtags, list: '', tag: styles.hashtag })}`;
   return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(doc.title)}</title><article class="wechat-article" style="${styles.article}">${body}</article>`;
 }
 
