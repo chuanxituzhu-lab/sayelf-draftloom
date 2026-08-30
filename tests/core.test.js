@@ -77,6 +77,32 @@ test('smart cover adds a library asset, places it first, and keeps the summary w
   assert.deepEqual(parseCommand('封面一键入库'), { type: 'noop' });
 });
 
+test('smart cover resets summary and both cover copy fields from the extracted core', () => {
+  const cover = { id: 'stale-cover', name: '封面.png', type: 'image/png', size: 1, width: 900, height: 383, dataUrl: 'data:image/png;base64,AA==', alt: '旧封面' };
+  let doc = importArticle({
+    text: '# AI 写作的真正价值\n\n旧摘要不应继续沿用。\n\n真正稀缺的不是生成速度，而是判断什么值得表达。\n\n持续复盘才能让内容变得更好。',
+    assets: [cover]
+  });
+  doc = { ...doc, subtitle: '人工旧摘要', meta: { ...doc.meta, subtitleLocked: true, subtitleSource: 'human', coverCopyLocked: true } };
+  doc.assets[0].coverMain = '旧主文案';
+  doc.assets[0].coverSub = '旧副文案';
+
+  const result = reduceDocument(doc, { type: 'smartCover' });
+  const refreshedCover = result.doc.assets.find(asset => asset.id === 'stale-cover');
+  const coreSummary = result.doc.meta.visualPlan.coreContent.summary;
+
+  assert.equal(result.doc.subtitle, coreSummary);
+  assert.match(result.doc.subtitle, /真正稀缺/);
+  assert.equal(refreshedCover.coverMain, result.doc.title);
+  assert.ok(coreSummary.startsWith(refreshedCover.coverSub.replace(/…$/, '')));
+  assert.ok([...refreshedCover.coverSub].length <= 14);
+  assert.notEqual(refreshedCover.coverMain, '旧主文案');
+  assert.notEqual(refreshedCover.coverSub, '旧副文案');
+  assert.equal(result.doc.meta.subtitleLocked, false);
+  assert.equal(result.doc.meta.coverCopyLocked, false);
+  assert.equal(result.doc.meta.coverCopySource, 'core');
+});
+
 test('title image action extracts core content without replacing the current title', () => {
   const doc = importArticle({ text: '# 人工确认标题\n\nAI 可以降低制作成本，但真正稀缺的是 Idea 的价值。\n\n持续执行才能获得反馈。' });
   const result = reduceDocument(doc, { type: 'generateTitleImage' });

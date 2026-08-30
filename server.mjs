@@ -5,6 +5,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyProtectedLocalConfig } from './scripts/local-config.mjs';
 import { extractLocalDocument, MAX_DOCUMENT_BYTES } from './scripts/document-extract.mjs';
+import { normalizeQrAuthUrl, qrDataUrlForAuthUrl } from './src/qr-auth.js';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 applyProtectedLocalConfig(root);
@@ -65,12 +66,30 @@ async function saveAuth(input = {}) {
   await writeFile(authPath, JSON.stringify(saved, null, 2), 'utf8');
   return { authorized: true, persisted: true, expiresAt: saved.expires_at };
 }
+
+let qrCache = { authUrl: '', imageUrl: null, error: null };
+async function generatedQrImage(authUrl) {
+  if (!authUrl) return { imageUrl: null, generated: false, error: null };
+  if (qrCache.authUrl === authUrl && qrCache.imageUrl) return { imageUrl: qrCache.imageUrl, generated: true, error: null };
+  try {
+    const imageUrl = await qrDataUrlForAuthUrl(authUrl);
+    qrCache = { authUrl, imageUrl, error: null };
+    return { imageUrl, generated: true, error: null };
+  } catch (error) {
+    qrCache = { authUrl, imageUrl: null, error: error.message };
+    return { imageUrl: null, generated: false, error: error.message };
+  }
+}
+
 async function wechatStatus() {
   const saved = await readSavedAuth();
   const hasToken = Boolean(process.env.WECHAT_ACCESS_TOKEN || process.env.WX_ACCESS_TOKEN) || Boolean(saved?.access_token);
   const hasAppCredentials = Boolean((process.env.WECHAT_APP_ID || process.env.WX_APPID) && (process.env.WECHAT_APP_SECRET || process.env.WX_APPSECRET));
-  const qrAuthUrl = process.env.WECHAT_QR_AUTH_URL || null;
+  const rawQrAuthUrl = process.env.WECHAT_QR_AUTH_URL || '';
+  const normalizedQrAuth = normalizeQrAuthUrl(rawQrAuthUrl);
+  const qrAuthUrl = normalizedQrAuth.url;
   const qrImageUrl = process.env.WECHAT_QR_IMAGE_URL || null;
+  const generated = qrImageUrl ? { imageUrl: qrImageUrl, generated: false, error: null } : await generatedQrImage(qrAuthUrl);
   return {
     remoteReady: hasToken || hasAppCredentials,
     authorized: hasToken,
@@ -78,10 +97,12 @@ async function wechatStatus() {
     expiresAt: saved?.expires_at || null,
     qrAuthorization: Boolean(qrAuthUrl || qrImageUrl),
     qrAuthUrl,
-    qrImageUrl,
+    qrImageUrl: generated.imageUrl,
+    qrGenerated: generated.generated,
+    qrError: normalizedQrAuth.error || generated.error,
     callbackUrl: process.env.WECHAT_QR_CALLBACK_URL || `http://127.0.0.1:${port}/api/wechat/auth/callback`,
     mode: hasToken || hasAppCredentials ? 'wechat-api' : 'local-bundle',
-    message: '授权凭据仅保存在本机 .local-data；下次启动会自动复用。二维码由已配置的授权适配器提供。'
+    message: '授权凭据仅保存在本机 .local-data；下次启动会自动复用。配置授权入口后，二维码由本机自动生成。'
   };
 }
 async function publishGuiDocument(doc, confirm = false) {
@@ -106,6 +127,16 @@ const server = http.createServer(async (req, res) => {
   try {
     const raw = decodeURIComponent((req.url || '/').split('?')[0]);
     if (raw === '/api/wechat/status' && req.method === 'GET') return json(res, 200, await wechatStatus());
+    if (raw === '/api/wechat/auth/callback' && req.method === 'GET') {
+      return json(res, 200, {
+        ok: false,
+        code: 'AUTH_CALLBACK_ENDPOINT',
+        message: '这是授权回调地址，不是二维码展示页。请打开本机首页查看二维码；授权适配器扫码完成后，再通过 POST 回调凭据。',
+        homeUrl: `http://127.0.0.1:${port}/`,
+        statusUrl: `http://127.0.0.1:${port}/api/wechat/status`,
+        callbackMethod: 'POST'
+      });
+    }
     if (raw === '/api/wechat/auth/callback' && req.method === 'POST') {
       const body = await readJson(req);
       return json(res, 200, await saveAuth(body));

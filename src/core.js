@@ -591,14 +591,14 @@ export function parseCommand(input) {
   if ((m = raw.match(/^(?:主题|样式)[：:]?\s*(.+)$/i))) return { type: 'setTheme', theme: normalizeTheme(m[1].trim()) };
   if ((m = raw.match(/^(?:去\s*AI\s*味|自然化|润色)(?:[：:]?\s*(保守|自然|conservative|natural))?$/i))) return { type: 'humanize', mode: /保守|conservative/i.test(m[1] || '') ? 'conservative' : 'natural' };
   if (/^(?:提炼核心(?:内容)?(?:并)?生成(?:一张)?标题图|生成标题(?:图片|图))$/i.test(raw)) return { type: 'generateTitleImage' };
-  if (/^(?:智能配图|自动配图|自动标题(?:图文)?)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, titleMode: 'viral' };
+  if (/^(?:智能配图|自动配图|自动标题(?:图文)?)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, autoImageCount: true, titleMode: 'viral' };
   // The former import-style command is intentionally retired so it cannot
   // accidentally append the phrase as a paragraph. Use “封面一键设置”.
   if (/^封面一键入库$/i.test(raw)) return { type: 'noop' };
   if (/^(?:封面一键设置|一键设置封面|智能设置封面|自动设置封面)$/i.test(raw)) return { type: 'smartCover' };
   if (/^(?:爆款标题|智能标题|生成爆款标题)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, titleMode: 'viral', forceTitle: true };
   if (/^(?:智能自动化)?(?:优化|修正|调整)(?:修改)?(?:执行)?(?:微信公众号|微信|公众号)?(?:发布)?(?:约束|限制)$/i.test(raw) || /^(?:智能优化|自动优化)(?:微信|公众号)?(?:发布)?(?:约束|限制)$/i.test(raw)) return { type: 'optimizeWechat' };
-  if (/^(?:图片智能导入|图片自动导入|自动导入图片|自动填充图片|自动填充素材)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, fillUnmatched: true, titleMode: 'safe' };
+  if (/^(?:图片智能导入|图片自动导入|自动导入图片|自动填充图片|自动填充素材)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, autoImageCount: true, fillUnmatched: true, titleMode: 'safe' };
   if ((m = raw.match(/^删除(?:当前|选中)(?:块|段落|内容)?$/i))) return { type: 'deleteSelected' };
   if (/^(?:上移|向上移动)(?:当前|选中)?/i.test(raw)) return { type: 'moveSelected', direction: -1 };
   if (/^(?:下移|向下移动)(?:当前|选中)?/i.test(raw)) return { type: 'moveSelected', direction: 1 };
@@ -682,7 +682,9 @@ export function reduceDocument(doc, intent, selectedId = null) {
         titleMode: intent.titleMode || 'safe',
         forceTitle: intent.forceTitle === true,
         titleProfile: intent.titleProfile || {},
-        fillUnmatched: intent.fillUnmatched === true
+        fillUnmatched: intent.fillUnmatched === true,
+        autoImageCount: intent.autoImageCount === true,
+        maxBodyImages: Number.isFinite(Number(intent.maxBodyImages)) ? Number(intent.maxBodyImages) : undefined
       });
       return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
     }
@@ -693,14 +695,17 @@ export function reduceDocument(doc, intent, selectedId = null) {
         includeCover: true,
         titleMode: 'safe',
         forceTitle: false,
-        fillUnmatched: false
+        fillUnmatched: false,
+        useCoreForCover: true,
+        forceCoreSummary: true
       });
-      const coverAssetId = composed.meta?.visualPlan?.coverAssetId;
+      const refreshed = syncCoverCopyFromCore(composed);
+      const coverAssetId = refreshed.meta?.visualPlan?.coverAssetId;
       if (coverAssetId) {
-        const coverResult = reduceDocument(composed, { type: 'setCoverAsset', assetId: coverAssetId }, selectedId);
+        const coverResult = reduceDocument(refreshed, { type: 'setCoverAsset', assetId: coverAssetId }, selectedId);
         return { doc: coverResult.doc, selectedId: coverResult.selectedId, changed: true };
       }
-      return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
+      return { doc: refreshed, selectedId: refreshed.blocks[0]?.id || selectedId, changed: true };
     }
     case 'generateTitleImage': {
       const composed = autoComposeDocument(next, {
@@ -937,6 +942,41 @@ function getCoverBlock(doc = {}) {
 function getCoverAsset(doc = {}) {
   const block = getCoverBlock(doc);
   return block ? (doc.assets || []).find(asset => asset.id === block.assetId) || null : null;
+}
+
+function syncCoverCopyFromCore(doc) {
+  const coreSummary = String(doc.meta?.visualPlan?.coreContent?.summary || doc.subtitle || '').trim();
+  const digest = fitWechatText(coreSummary, WECHAT_LIMITS.digestChars).value;
+  const coverAsset = getCoverAsset(doc);
+  const coverMain = fitWechatText(doc.title || coverAsset?.alt || '', WECHAT_LIMITS.titleImage.mainChars).value;
+  const coverSub = fitWechatText(digest, WECHAT_LIMITS.titleImage.subChars).value;
+
+  doc.subtitle = digest;
+  doc.meta = {
+    ...(doc.meta || {}),
+    subtitleLocked: false,
+    subtitleSource: 'core',
+    coverCopyLocked: false,
+    coverCopySource: 'core'
+  };
+  if (!coverAsset) return doc;
+
+  if (coverAsset.generated && coverAsset.source === 'draftloom:creative-local') {
+    const refreshed = createCreativeAsset({
+      id: coverAsset.id,
+      title: coverMain,
+      subtitle: coverSub,
+      keywords: doc.meta?.visualPlan?.keywords || [],
+      theme: doc.theme,
+      role: 'cover'
+    });
+    Object.assign(coverAsset, { ...refreshed, recognition: coverAsset.recognition });
+  } else {
+    coverAsset.coverMain = coverMain;
+    coverAsset.coverSub = coverSub;
+  }
+  coverAsset.visualRole = 'cover';
+  return doc;
 }
 
 function getCoverCopy(doc = {}, asset = null) {

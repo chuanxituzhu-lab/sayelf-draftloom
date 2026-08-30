@@ -255,12 +255,59 @@ export function recognizeAssetContent(asset = {}) {
 }
 
 function blockHasImage(block = {}) { return block.type === 'image' && block.assetId || block.type === 'gallery' && (block.assetIds || []).length; }
+
+const IMAGE_BUDGET_DEFAULTS = Object.freeze({ maxBodyImages: 6, charsPerImage: 900, headingWeight: 0.72 });
+
+function compactLength(value = '') { return [...String(value).replace(/\s+/g, '')].length; }
+function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
+
+/**
+ * Calculates a conservative body-image budget from article length and structure.
+ * It is intentionally deterministic so users can review and undo the result.
+ */
+export function deriveImageBudget(doc = {}, { includeCover = true, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages } = {}) {
+  const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
+  const source = plainArticleText(articleSource(doc));
+  const contentChars = compactLength(source);
+  const headingCount = blocks.filter(block => block.type === 'heading' && textOfBlock(block).trim()).length;
+  const longParagraphCount = blocks.filter(block => ['paragraph', 'quote'].includes(block.type) && compactLength(textOfBlock(block)) >= 120).length;
+  const quoteCount = blocks.filter(block => block.type === 'quote' && textOfBlock(block).trim()).length;
+  const sectionSignal = Math.max(headingCount, Math.ceil(longParagraphCount / 2), quoteCount ? 1 : 0);
+  const lengthImages = contentChars ? Math.ceil(contentChars / IMAGE_BUDGET_DEFAULTS.charsPerImage) : 0;
+  const structureImages = sectionSignal ? Math.ceil(sectionSignal * IMAGE_BUDGET_DEFAULTS.headingWeight) : 0;
+  const safeMax = clamp(Number(maxBodyImages) || IMAGE_BUDGET_DEFAULTS.maxBodyImages, 1, 12);
+  const bodyImages = contentChars ? clamp(Math.max(1, lengthImages, structureImages), 1, safeMax) : 0;
+  const imageBlocks = blocks.filter(block => block.type === 'image' && block.assetId);
+  const currentCover = imageBlocks.find(block => block.visualRole === 'cover');
+  const currentBodyImages = imageBlocks.filter(block => block !== currentCover).length;
+  return {
+    version: 1,
+    mode: 'local-deterministic',
+    contentChars,
+    headingCount,
+    longParagraphCount,
+    bodyImages,
+    currentBodyImages,
+    coverImages: includeCover ? 1 : 0,
+    totalImages: bodyImages + (includeCover ? 1 : 0),
+    maxBodyImages: safeMax,
+    rule: `按篇幅（约每 ${IMAGE_BUDGET_DEFAULTS.charsPerImage} 字一张）与章节密度取较大值，正文上限 ${safeMax} 张`
+  };
+}
+
+function distributeAnchors(items, max) {
+  if (items.length <= max) return items;
+  if (max <= 0) return [];
+  if (max <= 1) return items.slice(0, 1);
+  return Array.from({ length: max }, (_, index) => items[Math.round(index * (items.length - 1) / (max - 1))]);
+}
+
 function anchorCandidates(doc = {}, { max = 4 } = {}) {
   const blocks = doc.blocks || [];
   const headings = blocks.filter(block => block.type === 'heading');
-  if (headings.length) return headings.slice(0, max);
+  if (headings.length) return distributeAnchors(headings, max);
   const paragraphs = blocks.filter(block => block.type === 'paragraph' && textOfBlock(block).length >= 28);
-  return (paragraphs.length ? paragraphs : blocks.filter(block => ['paragraph', 'quote', 'list'].includes(block.type))).slice(0, max);
+  return distributeAnchors(paragraphs.length ? paragraphs : blocks.filter(block => ['paragraph', 'quote', 'list'].includes(block.type)), max);
 }
 
 function scoreAsset(asset, anchorText, keywords) {
@@ -295,10 +342,11 @@ function scoreAsset(asset, anchorText, keywords) {
  * Plans cover and section placements. It never changes the document and can
  * therefore be shown to a human before applying it.
  */
-export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = true, fillUnmatched = false } = {}) {
+export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = true, fillUnmatched = false, autoImageCount = false, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages } = {}) {
   const blocks = doc.blocks || [];
   const assets = doc.assets || [];
   const keywords = extractKeywords(`${doc.title || ''}\n${articleSource(doc)}`, 8);
+  const imageBudget = deriveImageBudget(doc, { includeCover, maxBodyImages });
   const assetAnalyses = assets.map(asset => ({ id: asset.id, name: asset.name, ...recognizeAssetContent(asset) }));
   const referenced = new Set(blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])]).filter(Boolean));
   const imageBlocks = blocks.filter(block => block.type === 'image' && block.assetId);
@@ -319,12 +367,17 @@ export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = tr
     : (namedRasterCover || currentCoverAsset || namedCover || firstImageAsset || (semanticCover?.score >= 1 ? semanticCover.asset : null));
   const coverAsset = includeCover ? preferredCover : null;
   const coverBlock = coverAsset && imageBlocks.find(block => block.assetId === coverAsset.id);
+  const currentBodyImages = imageBlocks.filter(block => block !== currentCoverBlock).length;
+  const targetBodyImages = autoImageCount ? imageBudget.bodyImages : null;
+  const remainingBodySlots = autoImageCount ? Math.max(0, targetBodyImages - currentBodyImages) : null;
   const usedForSections = new Set([coverAsset?.id].filter(Boolean));
   const sectionPlacements = [];
   const suggestions = [];
   let generatedCount = 0;
+  let plannedBodyAdds = 0;
 
-  for (const anchor of anchorCandidates(doc, { max: fillUnmatched ? 12 : 4 })) {
+  for (const anchor of anchorCandidates(doc, { max: autoImageCount ? targetBodyImages : (fillUnmatched ? 12 : 4) })) {
+    if (autoImageCount && plannedBodyAdds >= remainingBodySlots) break;
     const index = blocks.findIndex(block => block.id === anchor.id);
     const following = blocks[index + 1];
     const alreadyHasImage = following && blockHasImage(following);
@@ -350,11 +403,14 @@ export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = tr
         contentLabels: chosenRecognition.labels,
         recognitionSource: chosenRecognition.source
       });
+      plannedBodyAdds += 1;
       continue;
     }
-    if (generatedCount < Math.max(0, maxGenerated)) {
+    const generatedLimit = autoImageCount ? remainingBodySlots : Math.max(0, maxGenerated);
+    if (generatedCount < generatedLimit) {
       generatedCount += 1;
       sectionPlacements.push({ anchorId: anchor.id, assetId: null, role: 'section', reason: '本地创意图占位', brief: textOfBlock(anchor) });
+      plannedBodyAdds += 1;
     } else {
       suggestions.push(`建议为“${truncate(textOfBlock(anchor), 22)}”补充一张场景图`);
     }
@@ -364,6 +420,13 @@ export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = tr
     keywords,
     assetAnalyses,
     recognition: { version: 1, mode: 'local-metadata-with-vision-adapter-seam' },
+    imageBudget: {
+      ...imageBudget,
+      auto: autoImageCount,
+      targetBodyImages,
+      plannedBodyImages: currentBodyImages + plannedBodyAdds,
+      plannedNewBodyImages: plannedBodyAdds
+    },
     coverAssetId: coverAsset?.id || null,
     coverBlockId: coverBlock?.id || null,
     sectionPlacements,
@@ -424,7 +487,7 @@ function insertAfterAnchor(blocks, anchorId, block) {
 }
 
 /** Applies the plan and returns a new document, suitable for a reducer intent. */
-export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false, useCoreForCover = false } = {}) {
+export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false, useCoreForCover = false, forceCoreSummary = false, autoImageCount = false, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages } = {}) {
   const next = clone(input);
   const source = articleSource(next);
   const coreContent = extractCoreContent({ text: source, title: next.title, max: 96, maxPoints: 3 });
@@ -435,13 +498,13 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
   const titleInfo = titlePlan && canAutoSetTitle
     ? { title: titlePlan.selected, confidence: 0.86, source: 'viral', mode: 'viral' }
     : deriveArticleTitle({ text: source, filename: next.meta?.importedFrom || '', currentTitle: next.title });
-  const subtitle = deriveArticleSubtitle({ text: source, currentSubtitle: next.subtitle });
+  const subtitle = forceCoreSummary ? coreContent.summary : deriveArticleSubtitle({ text: source, currentSubtitle: next.subtitle });
   if (canAutoSetTitle || !next.title) next.title = titleInfo.title;
   next.subtitle = subtitle;
   next.assets = Array.isArray(next.assets) ? next.assets : [];
   next.blocks = Array.isArray(next.blocks) ? next.blocks : [];
 
-  const plan = planVisualLayout(next, { maxGenerated, includeCover, fillUnmatched });
+  const plan = planVisualLayout(next, { maxGenerated, includeCover, fillUnmatched, autoImageCount, maxBodyImages });
   const plannedAnalyses = new Map(plan.assetAnalyses.map(item => [item.id, item]));
   for (const asset of next.assets) {
     const analysis = plannedAnalyses.get(asset.id);
@@ -474,14 +537,16 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
   }
 
   let generatedIndex = 0;
+  let appliedBodyAdds = 0;
   for (const placement of plan.sectionPlacements) {
+    if (autoImageCount && plan.imageBudget.currentBodyImages + appliedBodyAdds >= plan.imageBudget.targetBodyImages) break;
     let assetId = placement.assetId;
     if (!assetId && generate) assetId = addOrUpdateGenerated({ role: 'section', anchorId: placement.anchorId, index: generatedIndex++, brief: placement.brief }).id;
     if (!assetId) continue;
     const alreadyPlaced = next.blocks.some(block => block.type === 'image' && block.assetId === assetId && (block.visualAnchor === placement.anchorId || !block.visualAnchor));
     if (alreadyPlaced) continue;
     const asset = next.assets.find(item => item.id === assetId);
-    insertAfterAnchor(next.blocks, placement.anchorId, {
+    const inserted = insertAfterAnchor(next.blocks, placement.anchorId, {
       id: randomId(),
       type: 'image',
       assetId,
@@ -499,6 +564,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
       },
       generatedBy: asset?.generated ? 'autoComposeVisuals' : undefined
     });
+    if (inserted) appliedBodyAdds += 1;
   }
 
   // Explicit “图片自动导入” mode also brings in any remaining library images.
@@ -507,6 +573,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
   if (fillUnmatched) {
     const usedAssetIds = new Set(next.blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])]).filter(Boolean));
     for (const asset of next.assets.filter(item => !usedAssetIds.has(item.id))) {
+      if (autoImageCount && plan.imageBudget.currentBodyImages + appliedBodyAdds >= plan.imageBudget.targetBodyImages) break;
       const analysis = recognizeAssetContent(asset);
       next.blocks.push({
         id: randomId(),
@@ -521,11 +588,11 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
           contentLabels: analysis.labels,
           recognitionSource: analysis.source,
           matchMethod: 'content-recognition-fallback',
-          reason: '素材库图片自动填充',
-          matchMethod: 'content-recognition-fallback'
+          reason: '素材库图片自动填充'
         }
       });
       usedAssetIds.add(asset.id);
+      appliedBodyAdds += 1;
       plan.sectionPlacements.push({ anchorId: null, assetId: asset.id, role: 'library-auto', reason: '素材库图片自动填充', matchMethod: 'content-recognition-fallback', confidence: analysis.confidence, contentLabels: analysis.labels, recognitionSource: analysis.source });
     }
   }
@@ -535,15 +602,25 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
     const asset = next.assets.find(item => item.id === analysis.id);
     if (asset) asset.recognition = analysis;
   }
+  const finalImageBlocks = next.blocks.filter(block => block.type === 'image' && block.assetId);
+  const finalCoverBlock = finalImageBlocks.find(block => block.visualRole === 'cover');
+  const finalBodyImages = finalImageBlocks.filter(block => block !== finalCoverBlock).length;
 
   next.meta = {
     ...(next.meta || {}),
+    ...(forceCoreSummary ? { subtitleLocked: false, subtitleSource: 'core', coverCopyLocked: false, coverCopySource: 'core' } : {}),
     layoutMode: 'smart',
     visualPlan: {
       version: 1,
       generatedAt: new Date().toISOString(),
       title: titleInfo,
       coreContent,
+      imageBudget: {
+        ...plan.imageBudget,
+        appliedNewBodyImages: appliedBodyAdds,
+        finalBodyImages,
+        finalTotalImages: finalImageBlocks.length
+      },
       keywords: plan.keywords,
       assetAnalyses: finalAssetAnalyses,
       recognition: plan.recognition,

@@ -35,8 +35,9 @@ description: Edit and preview Chinese WeChat Official Account articles with loca
 - GUI 提供“清空重传”和“文章记录”：换稿前自动保存当前稿件，最近 12 篇文章结构保存在浏览器本机；记录可重新打开或删除，图片引用复用本地素材库。
 - 导入或编辑时，普通段落保持原样；重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号只在对应文字范围内加粗或加浅色标记，状态可随文章版本一起回滚。
 - `generateTitleImage`：本地提炼文章核心内容，生成一张 900×383 标题图片并写入素材库，标题和摘要仍可人工修改。
-- `autoComposeVisuals({generate,maxGenerated,titleMode,forceTitle,fillUnmatched})`：识别图片文件名、描述以及可选的 OCR/视觉标签，再根据文章语义生成摘要与爆款标题计划，自动将素材/本地创意图插入章节；`fillUnmatched:true` 会把剩余素材库图片按顺序补入正文。每个匹配图片区块会记录置信度、命中关键词、内容标签和识别来源，生成结果可人工替换、移动或删除。`forceTitle:true` 仅用于用户主动点击“生成爆款标题”，人工编辑过的标题默认锁定。
-- `coverSet()`：根据封面与内容摘要设置区，优先复用素材库中的合规封面，置为文章首图并同步摘要；若没有合规封面才生成一个可替换候选，不重复导入已有素材。`smartCover()` 作为内部兼容别名保留。
+- `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})`：先按正文篇幅与章节密度计算正文配图预算，再识别图片文件名、描述以及可选的 OCR/视觉标签，将素材/本地创意图插入分布均匀的章节；`fillUnmatched:true` 也遵守预算，不会把剩余素材库图片无上限追加。每个匹配图片区块会记录置信度、命中关键词、内容标签和识别来源，生成结果可人工替换、移动或删除。`forceTitle:true` 仅用于用户主动点击“生成爆款标题”，人工编辑过的标题默认锁定。
+- `coverSet()`：根据封面与内容摘要设置区，优先复用素材库中的合规封面，置为文章首图，并依据核心提炼结果同步摘要、封面主文案和副文案；若没有合规封面才生成一个可替换候选，不重复导入已有素材。`smartCover()` 作为内部兼容别名保留。
+- 扫码授权：配置真实 `WECHAT_QR_AUTH_URL` 后由本机自动渲染二维码；配置 `WECHAT_QR_IMAGE_URL` 可直接显示已有二维码。无真实授权入口时不生成伪造二维码，扫码成功后仍需适配器 POST `access_token` 到本机回调。
 - GUI 的“公众号封面与内容摘要”独立设置区提供封面素材选择、900×383 头条预览、主/副文案（10/14 字）和内容摘要（128 字）编辑；手工封面文案会锁定，重新执行智能设置可解除锁定并按正文重算。
 - `optimizeWechat()`：按共享微信限制智能蒸馏正文，并同步优化标题、作者、内容摘要、封面主/副文案；预览按“封面 → 标题 → 作者/时间 → 内容摘要 → 正文”动态重排，结果可通过 undo/redo 回滚。
 - `checkWechat()`：一键执行微信字段、正文、封面和排版检查；先自动修正可安全修正项，再返回仍需人工处理的问题。
@@ -67,7 +68,7 @@ description: Edit and preview Chinese WeChat Official Account articles with loca
   {"type":"setTheme","theme":"ink"},
   {"type":"setTheme","theme":"sunset"},
   {"type":"humanize","mode":"natural"},
-  {"type":"autoComposeVisuals","generate":true,"maxGenerated":3,"titleMode":"viral"},
+  {"type":"autoComposeVisuals","generate":true,"autoImageCount":true,"maxGenerated":3,"titleMode":"viral"},
   {"type":"smartCover"},
   {"type":"optimizeWechat"}
 ]

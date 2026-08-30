@@ -81,4 +81,5 @@ npm start   # 浏览器打开 http://127.0.0.1:4173
 - Document State 是唯一内容事实源；所有内容变更经由 Intent → Reducer → VersionStore，自动写入 `revision + updatedAt`。
 - 缩放等视图状态不得写入 Document State。
 - 最多 50 个编辑版本，支持 Undo/Redo。
-- `publish` 默认只生成本地交付包，不上传。仅当显式配置 `WECHAT_ACCESS_TOKEN`（或 `WECHAT_APP_ID` + `WECHAT_APP_SECRET`）后才提交远程草稿；Token 不写入文档或输出。
+- `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})` 会按正文篇幅与章节密度自动计算正文配图预算，再将本地素材或创意图放到分布均匀的章节位置；`fillUnmatched:true` 也遵守预算，不会把素材库图片无上限追加到文章。
+- `publish` 默认只生成本地交付包，不上传。仅当显式配置 `WECHAT_ACCESS_TOKEN`（或 `WECHAT_APP_ID` + `WECHAT_APP_SECRET`）后才提交远程草稿；Token 不写入文档或输出。扫码授权需要真实的授权适配器；配置 `WECHAT_QR_AUTH_URL` 后二维码由本机自动生成，配置 `WECHAT_QR_IMAGE_URL` 时直接显示已有二维码，本机回调只接收适配器提交的凭据，微信官方草稿接口本身不提供扫码登录。

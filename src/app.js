@@ -180,7 +180,9 @@ function growthBriefText(brief) {
 function renderTitlePlan() {
   const plan = doc.meta?.titlePlan;
   const core = doc.meta?.visualPlan?.coreContent;
-  const coreMarkup = core?.summary ? `<div class="title-ai-core"><b>核心提炼</b><span>${esc(core.summary)}</span>${core.points?.length ? `<small>${esc(core.points.slice(0, 3).join('；'))}</small>` : ''}</div>` : '';
+  const budget = doc.meta?.visualPlan?.imageBudget;
+  const budgetMarkup = budget?.bodyImages !== undefined ? `<small>智能配图计划：正文 ${budget.bodyImages} 张${budget.currentBodyImages ? `，已有 ${budget.currentBodyImages} 张` : ''}，含封面共 ${budget.totalImages} 张</small>` : '';
+  const coreMarkup = core?.summary ? `<div class="title-ai-core"><b>核心提炼</b><span>${esc(core.summary)}</span>${core.points?.length ? `<small>${esc(core.points.slice(0, 3).join('；'))}</small>` : ''}${budgetMarkup}</div>` : budgetMarkup;
   if (!plan?.candidates?.length) return coreMarkup || '<div class="title-ai-empty">导入文章或点击“智能配图与标题”，自动总结内容并生成爆款标题候选。</div>';
   const candidates = plan.candidates.map((item, index) => `<button type="button" class="title-candidate ${item.title === doc.title ? 'active' : ''}" data-title-candidate="${esc(item.title)}"><b>${index + 1}</b><span>${esc(item.title)}</span><small>${esc(item.rationale || '内容钩子')}</small></button>`).join('');
   return `${coreMarkup}<div class="title-ai-summary"><b>标题分析摘要（参考）</b><span>${esc(plan.summary || '')}</span></div><div class="title-ai-candidates">${candidates}</div><small class="title-ai-note">${esc(plan.note || '标题仅基于文章内容生成，发布前请人工核对。')}</small>`;
@@ -198,7 +200,7 @@ function renderCoverSummaryPanel() {
     : '尚未设置封面；公众号草稿必须有头条封面图';
   const core = doc.meta?.visualPlan?.coreContent;
   const coreMarkup = core?.summary ? `<div class="core-content-summary"><b>核心提炼</b><span>${esc(core.summary)}</span></div>` : '';
-  return `<section class="cover-summary-panel"><div class="cover-summary-head"><div><h3>公众号封面与内容摘要</h3><span>独立设置区 · 按公众号字段 1:1 复刻并同步右侧预览</span></div><div class="cover-summary-actions"><button id="titleImageAutoBtn" type="button" class="primary-button" title="在本机提炼文章核心内容，并生成一张 900×383 标题图片">提炼核心并生成标题图</button><button id="coverAutoBtn" type="button" title="优先复用素材库封面；缺少合规封面时生成可替换候选">封面一键设置</button></div></div>${coreMarkup}<div class="cover-summary-grid"><div class="cover-slot">${cover?.dataUrl ? `<img src="${cover.dataUrl}" alt="${esc(cover.alt || '公众号封面')}">` : '<div class="cover-slot-empty">封面图片<br>900×383</div>'}<span>头条封面 · 900×383</span></div><div class="cover-summary-fields"><label>封面素材<select id="coverAssetSelect">${coverOptions}</select></label><div class="cover-copy-row"><label>封面主文案<input id="coverMainInput" maxlength="${WECHAT_LIMITS.titleImage.mainChars}" value="${esc(cover?.coverMain || doc.title || '')}" placeholder="最多 10 字"></label><label>封面副文案<input id="coverSubInput" maxlength="${WECHAT_LIMITS.titleImage.subChars}" value="${esc(cover?.coverSub || doc.subtitle || '')}" placeholder="最多 14 字"></label></div><label>内容摘要<textarea id="subtitleInput" maxlength="${WECHAT_LIMITS.digestChars}" rows="2" placeholder="最多 128 字">${esc(doc.subtitle || '')}</textarea></label><div class="cover-summary-meta"><span>${esc(statusText)}</span><span>摘要 ${(doc.subtitle || '').length}/${WECHAT_LIMITS.digestChars} 字</span></div></div></div></section>`;
+  return `<section class="cover-summary-panel"><div class="cover-summary-head"><div><h3>公众号封面与内容摘要</h3><span>独立设置区 · 按公众号字段 1:1 复刻并同步右侧预览</span></div><div class="cover-summary-actions"><button id="titleImageAutoBtn" type="button" class="primary-button" title="在本机提炼文章核心内容，并生成一张 900×383 标题图片">提炼核心并生成标题图</button><button id="coverAutoBtn" type="button" title="根据核心提炼内容同步摘要、封面主文案和副文案">封面一键设置</button></div></div>${coreMarkup}<div class="cover-summary-grid"><div class="cover-slot">${cover?.dataUrl ? `<img src="${cover.dataUrl}" alt="${esc(cover.alt || '公众号封面')}">` : '<div class="cover-slot-empty">封面图片<br>900×383</div>'}<span>头条封面 · 900×383</span></div><div class="cover-summary-fields"><label>封面素材<select id="coverAssetSelect">${coverOptions}</select></label><div class="cover-copy-row"><label>封面主文案<input id="coverMainInput" maxlength="${WECHAT_LIMITS.titleImage.mainChars}" value="${esc(cover?.coverMain || doc.title || '')}" placeholder="最多 10 字"></label><label>封面副文案<input id="coverSubInput" maxlength="${WECHAT_LIMITS.titleImage.subChars}" value="${esc(cover?.coverSub || doc.subtitle || '')}" placeholder="最多 14 字"></label></div><label>内容摘要<textarea id="subtitleInput" maxlength="${WECHAT_LIMITS.digestChars}" rows="2" placeholder="最多 128 字">${esc(doc.subtitle || '')}</textarea></label><div class="cover-summary-meta"><span>${esc(statusText)}</span><span>摘要 ${(doc.subtitle || '').length}/${WECHAT_LIMITS.digestChars} 字</span></div></div></div></section>`;
 }
 
 function renderGrowthPanel() {
@@ -220,11 +222,13 @@ function commit(intent, label) {
   selectedId = finalResult.selectedId;
   doc = store.commit(finalResult.doc, label);
   let statusLabel = label;
-  if (intent.type === 'autoComposeVisuals' && intent.fillUnmatched) {
+  if (intent.type === 'autoComposeVisuals') {
     const placements = doc.meta?.visualPlan?.placements || [];
     const matched = placements.filter(item => item.assetId && item.anchorId).length;
     const appended = placements.filter(item => item.assetId && !item.anchorId).length;
-    statusLabel = `图片内容识别完成：匹配 ${matched} 个章节${appended ? `，补充 ${appended} 张图片` : ''}`;
+    const budget = doc.meta?.visualPlan?.imageBudget;
+    if (intent.fillUnmatched) statusLabel = `图片内容识别完成：按内容建议 ${budget?.bodyImages || 0} 张正文图，匹配 ${matched} 个章节${appended ? `，补充 ${appended} 张图片` : ''}`;
+    else statusLabel = `智能配图完成：按内容建议 ${budget?.bodyImages || 0} 张正文图，本次安排 ${placements.length} 张`;
   }
   if (intent.type === 'optimizeWechat' || finalResult.autoOptimized) {
     const optimization = finalResult.optimization;
@@ -234,7 +238,7 @@ function commit(intent, label) {
     const coverBlock = doc.blocks.find(block => block.type === 'image' && block.visualRole === 'cover');
     const coverAsset = coverBlock ? assetById(coverBlock.assetId) : null;
     statusLabel = coverAsset
-      ? `封面一键设置完成，内容摘要已同步（${coverAsset.width || 900}×${coverAsset.height || 383}）`
+      ? `封面一键设置完成：内容摘要、封面主文案和副文案已根据核心提炼同步（${coverAsset.width || 900}×${coverAsset.height || 383}）`
       : '封面设置完成，请在素材库确认图片';
   }
   persist(); render(); setStatus(statusLabel);
@@ -256,7 +260,7 @@ function render() {
     <header class="topbar">
       <div><strong>公众号排版</strong><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
-        <button id="visualComposeBtn" title="根据文章语义生成标题图，并把素材/创意图放到合适章节">智能配图与标题</button><button id="assetAutoFillBtn" title="识别图片内容（文件名、描述、OCR/视觉标签）并匹配正文章节">图片智能导入</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
+        <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="按文章篇幅与章节密度控制数量，识别图片内容并匹配正文章节">图片智能导入</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
       </div>
     </header>
@@ -616,10 +620,10 @@ function bindEvents() {
   document.querySelector('#redoBtn').onclick=()=>{doc=store.redo(doc);persist();render();setStatus('已重做一步');};
   document.querySelector('#zoomOut').onclick=()=>setZoom(zoom-.1); document.querySelector('#zoomIn').onclick=()=>setZoom(zoom+.1); document.querySelector('#zoomReset').onclick=()=>setZoom(1);
   document.querySelector('#draftBtn').onclick=openDraftDialog;
-  document.querySelector('#visualComposeBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,titleMode:'viral'},'智能配图与标题');
+  document.querySelector('#visualComposeBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral'},'智能配图与标题');
   document.querySelector('#coverAutoBtn').onclick=()=>commit({type:'smartCover'},'封面一键设置');
   document.querySelector('#titleImageAutoBtn').onclick=()=>commit({type:'generateTitleImage'},'提炼核心并生成标题图');
-  document.querySelector('#assetAutoFillBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:false,maxGenerated:0,fillUnmatched:true,titleMode:'safe'},'图片智能导入');
+  document.querySelector('#assetAutoFillBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:false,maxGenerated:0,autoImageCount:true,fillUnmatched:true,titleMode:'safe'},'图片智能导入');
   document.querySelector('#wechatCheckBtn').onclick=runWechatCheck;
   document.querySelector('#wechatOptimizeBtn').onclick=()=>autoRepairWechatConstraints('智能优化微信发布约束').then(() => {
     const validation = getWechatDraftValidation();
@@ -733,11 +737,12 @@ function renderAuthBox(value={}){
   const link=value.qrAuthUrl?`<a href="${esc(value.qrAuthUrl)}" target="_blank" rel="noreferrer">在新窗口打开授权页</a>`:'';
   const callback=value.callbackUrl?`<code>${esc(value.callbackUrl)}</code>`:'';
   if (value.qrAuthorization) {
-    qrBox.innerHTML=`<strong>扫码授权公众号</strong>${image}<div>${link}</div><small>扫码完成后等待本窗口自动刷新。授权适配器回调地址：${callback}</small>`;
+    qrBox.innerHTML=`<strong>扫码授权公众号</strong>${image}<div>${link}</div><small>${value.qrGenerated?'二维码已由本机根据授权入口自动生成。':''}扫码完成后等待本窗口自动刷新。授权适配器回调地址：${callback}</small>`;
   } else if (value.remoteReady) {
     qrBox.innerHTML=`<strong>已检测到本机授权配置</strong><p>当前无需扫码：本机已加载加密保存的公众号接口配置。点击“提交到公众号草稿箱”会直接上传图片并创建草稿，完成后请在公众号后台人工审核发送。</p><small>如需改用二维码授权，请配置 WECHAT_QR_IMAGE_URL（二维码图片）或 WECHAT_QR_AUTH_URL（授权页）。</small>`;
   } else {
-    qrBox.innerHTML=`<strong>尚未显示二维码</strong><p>官方草稿接口本身不提供扫码登录。请在启动本机服务前配置 WECHAT_QR_IMAGE_URL（二维码图片）或 WECHAT_QR_AUTH_URL（授权页），并让授权适配器把 access_token 通过 POST 回调到本机。</p><small>本机回调地址：${callback}</small>`;
+    const error = value.qrError ? `<p>授权入口配置无效：${esc(value.qrError)}</p>` : '';
+    qrBox.innerHTML=`<strong>尚未显示二维码</strong>${error}<p>本机不会生成无效的默认二维码。请配置真实的 WECHAT_QR_AUTH_URL（授权页）或 WECHAT_QR_IMAGE_URL（二维码图片）；配置授权页后，本机会自动把该地址生成二维码。扫码完成后仍需由授权适配器把 access_token 通过 POST 回调到本机。</p><small>本机回调地址：${callback}</small>`;
   }
 }
 async function submitDraftToWechat({skipConfirm=false}={}){
@@ -800,7 +805,7 @@ async function handleArticleImport(fileList=[], pastedText=''){
     if(!text&&!imageFiles.length) throw new Error('没有找到文章文字或图片');
     const newAssets=await Promise.all(imageFiles.map(async file=>{const prepared=await optimizeImageFile(file);return {id:crypto.randomUUID(),name:file.name,type:prepared.type,size:prepared.size,dataUrl:prepared.dataUrl,alt:file.name.replace(/\.[^.]+$/,'')};}));
     const assets=mergeAssets(loadAssetLibrary(), newAssets);
-    const incoming=importArticle({text,filename:articleFile?.name||'pasted-article.txt',assets,autoCompose:true,visualOptions:{generate:true,maxGenerated:3,titleMode:'viral',forceTitle:true}});
+    const incoming=importArticle({text,filename:articleFile?.name||'pasted-article.txt',assets,autoCompose:true,visualOptions:{generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral',forceTitle:true}});
     if(extracted.warnings?.length) incoming.meta.importWarnings=[...(incoming.meta.importWarnings||[]),...extracted.warnings.map(item=>`本地 ${extracted.kind?.toUpperCase()||'文档'} 识别提示：${item}`)];
     if(replaceCurrentDocument(incoming,`自动排版导入：${articleFile?.name||`${assets.length} 张图片`}`)){
       const warnings=incoming.meta.importWarnings||[];
@@ -814,8 +819,8 @@ async function handleArticleImport(fileList=[], pastedText=''){
 window.wechatLayoutHarness = {  getState: () => structuredClone(doc),
   applyIntent: (intent, label='Harness 编辑') => commit(intent, label),
   applyText: (text) => commit(parseCommand(text), `Harness：${text.slice(0,24)}`),
-  importArticle: ({text,filename='pasted-article.txt',assets=[]}) => { const incoming=importArticle({text,filename,assets:mergeAssets(loadAssetLibrary(), assets),autoCompose:true,visualOptions:{generate:true,maxGenerated:3,titleMode:'viral',forceTitle:true}}); const changed=replaceCurrentDocument(incoming,`Harness 导入：${filename}`); return changed ? {doc:structuredClone(doc),guidance:getLayoutGuidance(doc)} : null; },
-  autoComposeVisuals: (options={}) => commit({type:'autoComposeVisuals',generate:options.generate !== false,maxGenerated:options.maxGenerated ?? 3,titleMode:options.titleMode || 'viral',forceTitle:options.forceTitle === true,fillUnmatched:options.fillUnmatched === true}, options.fillUnmatched ? '图片智能导入' : '智能配图与标题'),
+  importArticle: ({text,filename='pasted-article.txt',assets=[]}) => { const incoming=importArticle({text,filename,assets:mergeAssets(loadAssetLibrary(), assets),autoCompose:true,visualOptions:{generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral',forceTitle:true}}); const changed=replaceCurrentDocument(incoming,`Harness 导入：${filename}`); return changed ? {doc:structuredClone(doc),guidance:getLayoutGuidance(doc)} : null; },
+  autoComposeVisuals: (options={}) => commit({type:'autoComposeVisuals',generate:options.generate !== false,maxGenerated:options.maxGenerated ?? 3,autoImageCount:options.autoImageCount !== false,titleMode:options.titleMode || 'viral',forceTitle:options.forceTitle === true,fillUnmatched:options.fillUnmatched === true}, options.fillUnmatched ? '图片智能导入' : '智能配图与标题'),
   coverSet: () => commit({type:'smartCover'}, '封面一键设置'),
   smartCover: () => commit({type:'smartCover'}, '封面一键设置'),
   optimizeWechat: () => commit({type:'optimizeWechat'}, '智能优化微信发布约束'),

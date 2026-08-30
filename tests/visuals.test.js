@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoComposeDocument, deriveArticleTitle, extractCoreContent, extractKeywords, generateViralTitlePlan, planVisualLayout, recognizeAssetContent, renderCreativeSvg } from '../src/visuals.js';
+import { autoComposeDocument, deriveArticleTitle, deriveImageBudget, extractCoreContent, extractKeywords, generateViralTitlePlan, planVisualLayout, recognizeAssetContent, renderCreativeSvg } from '../src/visuals.js';
 import { importArticle, parseCommand } from '../src/core.js';
 
 test('natural language command exposes smart visual composition', () => {
-  assert.deepEqual(parseCommand('智能配图'), { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, titleMode: 'viral' });
-  assert.deepEqual(parseCommand('图片自动导入'), { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, fillUnmatched: true, titleMode: 'safe' });
-  assert.deepEqual(parseCommand('图片智能导入'), { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, fillUnmatched: true, titleMode: 'safe' });
+  assert.deepEqual(parseCommand('智能配图'), { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, autoImageCount: true, titleMode: 'viral' });
+  assert.deepEqual(parseCommand('图片自动导入'), { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, autoImageCount: true, fillUnmatched: true, titleMode: 'safe' });
+  assert.deepEqual(parseCommand('图片智能导入'), { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, autoImageCount: true, fillUnmatched: true, titleMode: 'safe' });
 });
 
 test('title derivation prefers a markdown heading and keeps WeChat length safe', () => {
@@ -55,6 +55,36 @@ test('image recognition uses vision metadata and exposes semantic labels', () =>
   assert.ok(recognition.labels.includes('茶与饮品'));
   assert.ok(recognition.keywords.includes('自然'));
   assert.equal(recognition.confidence, 0.93);
+});
+
+test('image budget scales with article length and section density', () => {
+  const short = importArticle({ text: '# 短文\n\n一句简短的说明。' });
+  const long = importArticle({ text: '# 长文\n\n## 第一部分\n\n' + '这里是一段用于验证篇幅预算的内容，包含观点、方法和执行细节。'.repeat(18) + '\n\n## 第二部分\n\n' + '这一部分继续补充案例、反馈和复盘。'.repeat(18) + '\n\n## 第三部分\n\n' + '最后总结长期实践与个人判断。'.repeat(18) });
+  const shortBudget = deriveImageBudget(short);
+  const longBudget = deriveImageBudget(long);
+  assert.equal(shortBudget.bodyImages, 1);
+  assert.ok(longBudget.bodyImages > shortBudget.bodyImages);
+  assert.equal(longBudget.totalImages, longBudget.bodyImages + 1);
+  assert.equal(longBudget.mode, 'local-deterministic');
+});
+
+test('automatic composition respects the content image budget', () => {
+  const input = importArticle({ text: '# 长文配图\n\n## 观点\n\n' + '这是一段足够长的观点内容，用来验证自动匹配图片数量。'.repeat(12) + '\n\n## 方法\n\n' + '这是一段足够长的方法内容，用来验证自动匹配图片数量。'.repeat(12) + '\n\n## 执行\n\n' + '这是一段足够长的执行内容，用来验证自动匹配图片数量。'.repeat(12) });
+  const composed = autoComposeDocument(input, { generate: true, includeCover: false, autoImageCount: true });
+  const bodyImages = composed.blocks.filter(block => block.type === 'image' && block.assetId).length;
+  assert.equal(bodyImages, composed.meta.visualPlan.imageBudget.bodyImages);
+  assert.equal(composed.meta.visualPlan.imageBudget.auto, true);
+  assert.ok(composed.meta.visualPlan.imageBudget.plannedNewBodyImages >= 1);
+});
+
+test('automatic asset fill stops at the content image budget', () => {
+  const assets = Array.from({ length: 8 }, (_, index) => ({ id: `library-${index}`, name: `图片-${index}.png`, type: 'image/png', size: 1, dataUrl: 'data:image/png;base64,AA==', alt: `图片-${index}` }));
+  const input = importArticle({ text: '# 预算测试\n\n## 第一节\n\n这一节内容足够长，可以自动匹配素材。\n\n## 第二节\n\n这一节内容也足够长，可以继续匹配素材。', assets: [] });
+  input.assets = assets;
+  const composed = autoComposeDocument(input, { generate: false, includeCover: false, autoImageCount: true, fillUnmatched: true });
+  const bodyImages = composed.blocks.filter(block => block.type === 'image' && block.assetId).length;
+  assert.equal(bodyImages, composed.meta.visualPlan.imageBudget.bodyImages);
+  assert.ok(composed.meta.visualPlan.placements.length <= composed.meta.visualPlan.imageBudget.bodyImages);
 });
 
 test('recognized image content is matched to the relevant article section', () => {
