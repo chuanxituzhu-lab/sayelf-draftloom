@@ -27,6 +27,9 @@ let growthReport = null;
 let lastWechatCheck = null;
 let autoGuidance = null;
 let draggedAssetId = null;
+let previewCoverAsset = null;
+let previewCoverSource = '';
+let previewCoverRequest = 0;
 
 function loadDocument() {
   try {
@@ -159,6 +162,38 @@ async function fetchLocalApi(url, options = {}, label = '本机接口请求') {
 function assetById(id) { return doc.assets.find(a => a.id === id); }
 function currentCoverBlock() { return doc.blocks.find(block => block.type === 'image' && block.visualRole === 'cover') || doc.blocks.find(block => block.type === 'image') || null; }
 function currentCoverAsset() { const block = currentCoverBlock(); return block ? assetById(block.assetId) : null; }
+function hasPreviewCover(asset) {
+  return Boolean(asset?.dataUrl && previewCoverAsset?.id === asset.id && previewCoverSource === asset.dataUrl);
+}
+function getPreviewCoverAsset(asset) {
+  return hasPreviewCover(asset) ? previewCoverAsset : asset;
+}
+async function syncPreviewCover() {
+  const asset = currentCoverAsset();
+  if (!asset?.dataUrl) {
+    previewCoverRequest += 1;
+    previewCoverAsset = null;
+    previewCoverSource = '';
+    return;
+  }
+  if (hasPreviewCover(asset)) return;
+  const request = ++previewCoverRequest;
+  const source = asset.dataUrl;
+  try {
+    // Preview must use the same deterministic 900×383 center crop as the
+    // WeChat upload path, even when an imported asset carries stale metadata.
+    const raster = await rasterizeWechatCover(asset);
+    if (request !== previewCoverRequest || currentCoverAsset()?.dataUrl !== source) return;
+    previewCoverAsset = raster;
+    previewCoverSource = source;
+    render();
+  } catch (error) {
+    if (request !== previewCoverRequest || currentCoverAsset()?.dataUrl !== source) return;
+    previewCoverAsset = asset;
+    previewCoverSource = source;
+    setStatus(`封面预览自动转换失败：${error.message}`);
+  }
+}
 function setStatus(text) { status = text; renderStatus(); }
 function renderStatus() {
   const el = document.querySelector('#statusText');
@@ -227,6 +262,7 @@ function renderTitlePlan() {
 
 function renderCoverSummaryPanel() {
   const cover = currentCoverAsset();
+  const previewCover = getPreviewCoverAsset(cover);
   const imageAssets = doc.assets.filter(asset => asset?.dataUrl && /^data:image\//i.test(asset.dataUrl));
   const coverCheck = cover ? inspectWechatCover({ width: cover.width, height: cover.height, bytes: cover.size, type: cover.type, main: cover.coverMain || doc.title || '', sub: cover.coverSub || doc.subtitle || '' }) : null;
   const coverOptions = imageAssets.length
@@ -237,7 +273,7 @@ function renderCoverSummaryPanel() {
     : '尚未设置封面；公众号草稿必须有头条封面图';
   const core = doc.meta?.visualPlan?.coreContent;
   const coreMarkup = core?.summary ? `<div class="core-content-summary"><b>核心提炼</b><span>${esc(core.summary)}</span></div>` : '';
-  return `<section class="cover-summary-panel"><div class="cover-summary-head"><div><h3>公众号封面与内容摘要</h3><span>独立设置区 · 按公众号字段 1:1 复刻并同步右侧预览</span></div><div class="cover-summary-actions"><button id="titleImageAutoBtn" type="button" class="primary-button" title="在本机提炼文章核心内容，并生成一张 900×383 标题图片">提炼核心并生成标题图</button><button id="coverAutoBtn" type="button" title="根据核心提炼内容同步摘要、封面主文案和副文案">封面一键设置</button></div></div>${coreMarkup}<div class="cover-summary-grid"><div class="cover-slot" data-cover-dropzone="true" aria-label="头条封面拖放区域">${cover?.dataUrl ? `<img src="${cover.dataUrl}" alt="${esc(cover.alt || '公众号封面')}">` : '<div class="cover-slot-empty">封面图片<br>900×383</div>'}<span>头条封面 · 900×383</span><small class="cover-drop-hint">将“我的素材”图片拖到这里可直接替换</small></div><div class="cover-summary-fields"><label>封面素材<select id="coverAssetSelect">${coverOptions}</select></label><div class="cover-copy-row"><label>封面主文案<input id="coverMainInput" maxlength="${WECHAT_LIMITS.titleImage.mainChars}" value="${esc(cover?.coverMain || doc.title || '')}" placeholder="最多 10 字"></label><label>封面副文案<input id="coverSubInput" maxlength="${WECHAT_LIMITS.titleImage.subChars}" value="${esc(cover?.coverSub || doc.subtitle || '')}" placeholder="最多 14 字"></label></div><label>内容摘要<textarea id="subtitleInput" maxlength="${WECHAT_LIMITS.digestChars}" rows="2" placeholder="最多 128 字">${esc(doc.subtitle || '')}</textarea></label><div class="cover-summary-meta"><span>${esc(statusText)}</span><span>摘要 ${(doc.subtitle || '').length}/${WECHAT_LIMITS.digestChars} 字</span></div></div></div></section>`;
+  return `<section class="cover-summary-panel"><div class="cover-summary-head"><div><h3>公众号封面与内容摘要</h3><span>独立设置区 · 按公众号字段 1:1 复刻并同步右侧预览</span></div><div class="cover-summary-actions"><button id="titleImageAutoBtn" type="button" class="primary-button" title="在本机提炼文章核心内容，并生成一张 900×383 标题图片">提炼核心并生成标题图</button><button id="coverAutoBtn" type="button" title="根据核心提炼内容同步摘要、封面主文案和副文案">封面一键设置</button></div></div>${coreMarkup}<div class="cover-summary-grid"><div class="cover-slot" data-cover-dropzone="true" aria-label="头条封面拖放区域">${previewCover?.dataUrl ? `<img src="${previewCover.dataUrl}" alt="${esc(cover?.alt || '公众号封面')}">` : '<div class="cover-slot-empty">封面图片<br>900×383</div>'}<span>头条封面 · 900×383</span><small class="cover-drop-hint">将“我的素材”图片拖到这里可直接替换</small></div><div class="cover-summary-fields"><label>封面素材<select id="coverAssetSelect">${coverOptions}</select></label><div class="cover-copy-row"><label>封面主文案<input id="coverMainInput" maxlength="${WECHAT_LIMITS.titleImage.mainChars}" value="${esc(cover?.coverMain || doc.title || '')}" placeholder="最多 10 字"></label><label>封面副文案<input id="coverSubInput" maxlength="${WECHAT_LIMITS.titleImage.subChars}" value="${esc(cover?.coverSub || doc.subtitle || '')}" placeholder="最多 14 字"></label></div><label>内容摘要<textarea id="subtitleInput" maxlength="${WECHAT_LIMITS.digestChars}" rows="2" placeholder="最多 128 字">${esc(doc.subtitle || '')}</textarea></label><div class="cover-summary-meta"><span>${esc(statusText)}</span><span>摘要 ${(doc.subtitle || '').length}/${WECHAT_LIMITS.digestChars} 字</span></div></div></div></section>`;
 }
 
 function renderGrowthPanel() {
@@ -245,6 +281,24 @@ function renderGrowthPanel() {
   const score = report ? `<div class="growth-score"><b>${report.viral.score}</b><span>/100 · ${report.viral.tier === 'strong' ? '强' : report.viral.tier === 'promising' ? '可提升' : '需优化'}</span><em>${report.compliance.decision}</em></div>` : '<div class="growth-empty">填写公众号画像后，分析当前文章并生成创作建议。</div>';
   const suggestions = report?.viral?.suggestions?.length ? `<ul>${report.viral.suggestions.slice(0, 4).map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : '';
   return `<section class="growth-section"><div class="section-head"><h3>公众号创作画像</h3><span class="hint">PingPong Growth</span></div><div class="growth-form"><input id="growthAccount" value="${esc(growthProfile.accountName)}" placeholder="公众号名称"><input id="growthPositioning" value="${esc(growthProfile.positioning)}" placeholder="定位 / 内容方向"><input id="growthAudience" value="${esc(growthProfile.audience)}" placeholder="目标读者"><input id="growthTone" value="${esc(growthProfile.tone)}" placeholder="语气风格"><input id="growthKeywords" value="${esc(growthProfile.targetKeywords.join('、'))}" placeholder="关键词，用顿号分隔"><input id="growthCta" value="${esc(growthProfile.cta)}" placeholder="结尾互动引导"><button id="growthAnalyze" class="primary-button">分析并生成创作建议</button></div><div class="growth-result">${score}${suggestions}<button id="growthCopyBrief" ${report ? '' : 'disabled'}>复制创作简报</button></div></section>`;
+}
+
+function captureViewState() {
+  return ['.left-panel', '.editor-panel', '.preview-panel', '.phone-stage', '.asset-grid', '.article-history-list', '.outline-section']
+    .map(selector => {
+      const element = document.querySelector(selector);
+      return element ? { selector, top: element.scrollTop, left: element.scrollLeft } : null;
+    })
+    .filter(Boolean);
+}
+
+function restoreViewState(state = []) {
+  state.forEach(({ selector, top, left }) => {
+    const element = document.querySelector(selector);
+    if (!element) return;
+    element.scrollTop = top;
+    element.scrollLeft = left;
+  });
 }
 
 function commit(intent, label) {
@@ -294,6 +348,7 @@ function autoOptimizeLoadedDocument(){
 }
 
 function render() {
+  const viewState = captureViewState();
   document.querySelector('#app').innerHTML = `
   <div class="shell theme-${normalizeTheme(doc.theme)}">
     <header class="topbar">
@@ -327,10 +382,12 @@ function render() {
         <div class="phone-stage"><article class="wechat-article theme-${normalizeTheme(doc.theme)}" style="transform:scale(${zoom})">${renderPreview()}</article></div>
       </aside>
     </main>
-    <footer class="statusbar"><span id="statusText">${esc(status)}</span><span id="revisionText">v${doc.meta.revision} · ${new Date(doc.meta.updatedAt).toLocaleTimeString()}</span></footer>
+    <footer class="statusbar"><span id="statusText" role="status" aria-live="polite">${esc(status)}</span><span id="revisionText">v${doc.meta.revision} · ${new Date(doc.meta.updatedAt).toLocaleTimeString()}</span></footer>
     <dialog id="draftDialog"><form method="dialog" class="draft-dialog"><div class="draft-dialog-head"><div><strong>导出到微信草稿箱</strong><p>先生成微信兼容草稿包，再按授权配置提交到公众号草稿箱。</p></div><button value="cancel" aria-label="关闭">×</button></div><div class="draft-status" id="draftStatus">正在检查本机授权配置…</div><div id="draftLimitBox"></div><div id="qrAuthBox" class="qr-auth" hidden></div><div class="draft-note"><b>授权说明</b><span>二维码由已配置的授权适配器提供；扫码完成后，适配器只需向本机回调地址提交凭据。凭据保存在本机 .local-data，下次启动自动复用。</span></div><div class="draft-actions"><button id="localDraftBtn" type="button">仅生成本地草稿包</button><button id="submitDraftBtn" type="button" class="primary-button">提交到公众号草稿箱</button></div><div class="draft-foot">草稿包由系统自动生成，普通编辑无需处理 JSON。</div></form></dialog>
   </div>`;
   bindEvents();
+  restoreViewState(viewState);
+  void syncPreviewCover();
 }
 function renderEditorBlock(b) {
   if (b.type === 'image') {
@@ -376,7 +433,14 @@ function renderEditorBlock(b) {
 }
 
 function renderPreview() {
-  return renderDocumentBody(doc);
+  const cover = currentCoverAsset();
+  const previewCover = getPreviewCoverAsset(cover);
+  if (!cover || !previewCover || previewCover.dataUrl === cover.dataUrl) return renderDocumentBody(doc);
+  const previewDoc = {
+    ...doc,
+    assets: doc.assets.map(asset => asset.id === cover.id ? previewCover : asset)
+  };
+  return renderDocumentBody(previewDoc);
 }
 
 function renderGuidance() {
@@ -497,6 +561,17 @@ function coverNeedsRaster(asset, validation) {
     || Number(validation?.fields?.bytes || 0) > WECHAT_LIMITS.titleImage.maxBytes;
 }
 
+async function coverNeedsRasterAsync(asset, validation) {
+  if (coverNeedsRaster(asset, validation)) return true;
+  try {
+    const image = await loadImage(asset.dataUrl);
+    return image.naturalWidth !== WECHAT_LIMITS.titleImage.headline.w
+      || image.naturalHeight !== WECHAT_LIMITS.titleImage.headline.h;
+  } catch {
+    return true;
+  }
+}
+
 /** Apply deterministic field fixes and browser-only cover conversion in one action. */
 async function autoRepairWechatConstraints(label = '一键检测与优化') {
   setStatus('正在智能检测并修复微信发布限制…');
@@ -534,7 +609,7 @@ async function autoRepairWechatConstraints(label = '一键检测与优化') {
       main: cover.asset.coverMain || '',
       sub: cover.asset.coverSub || ''
     });
-    if (coverNeedsRaster(cover.asset, coverValidation)) {
+    if (await coverNeedsRasterAsync(cover.asset, coverValidation)) {
       try {
         const raster = await rasterizeWechatCover(cover.asset);
         candidate.assets = candidate.assets.map(asset => asset.id === cover.asset.id ? raster : asset);

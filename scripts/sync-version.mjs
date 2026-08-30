@@ -19,7 +19,7 @@ const replaceVersion = (text, pattern, replacement) => {
 
 const readmePath = join(root, 'README.md');
 const readme = await readUtf8(readmePath);
-await writeFile(readmePath, replaceVersion(readme, /^# 公众号排版 MVP v[^\r\n]+/m, `# 公众号排版 MVP v${version}`), 'utf8');
+await writeFile(readmePath, replaceVersion(readme, /^# (?:公众号排版 MVP|Draftloom 公众号自动排版) v[^\r\n]+/m, `# Draftloom 公众号自动排版 v${version}`), 'utf8');
 
 const harnessPath = join(root, 'docs', 'HARNESS_CONTRACT.json');
 const harness = await readUtf8(harnessPath);

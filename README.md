@@ -1,62 +1,123 @@
-# 公众号排版 MVP v0.1.1
+# Draftloom 公众号自动排版 v0.1.2
 
-本地优先的公众号文章可视化排版 MVP。支持 Markdown/TXT、DOCX、PDF 稿件与图片导入；DOCX/PDF 文字识别和特殊符号清理均在本机完成。
+把 Markdown、TXT、DOCX、PDF 文章导入后，自动完成**本地识别、清理特殊符号、提炼核心、智能排版、生成封面、手机预览**，最后导出微信 HTML 或提交到公众号草稿箱。
 
-版本号以 `package.json` 为唯一来源。运行 `npm run version:sync` 会同步界面徽标、MCP 服务版本、Harness 文档和 README；合并到 GitHub `main` 后，`.github/workflows/version-sync.yml` 会自动递增 patch 版本并提交回仓库。
+适合需要稳定发布公众号文章，但不想反复复制、调整格式、找图片和改封面的人。
 
-## 安装与启动（首页入口）
+## 一句话看懂
 
-> 当前最新版已经合并到 `main`。请使用下面的命令，不要下载旧的 ZIP 快照。
+**导入文章 → 自动整理 → 人工确认 → 手机预览 → 导出或提交草稿。**
 
-### 1. 安装 Node.js
+所有文章、图片和授权配置默认留在本机处理；不会因为排版而自动上传到云端。
 
-安装 Node.js 20.16+ 或 22.3+（当前环境推荐 Node.js 22/24），安装完成后重新打开终端，并确认：
+## 三步开始使用
 
-```bash
-node --version
-npm --version
-```
+### 1. 准备 Node.js
 
-### 2. 下载最新版
+安装 Node.js 20.16+ 或 22.3+，然后重新打开终端。
+
+### 2. 下载项目
 
 ```bash
 git clone https://github.com/chuanxituzhu-lab/sayelf-draftloom.git
 cd sayelf-draftloom
 ```
 
-旧地址 `https://github.com/chuanxituzhu-lab/draftloom` 会自动跳转到同一个仓库。
+旧地址 `https://github.com/chuanxituzhu-lab/draftloom` 会自动跳转到本项目。
 
-### 3. 安装并启动
+### 3. 安装并打开
 
 ```bash
 npm install
 npm start
 ```
 
-看到以下提示即表示启动成功：
+浏览器打开：<http://127.0.0.1:4173>
 
-```text
-WeChat Layout MVP: http://127.0.0.1:4173
+如果 4173 端口被占用，可在 Windows PowerShell 中运行：
+
+```powershell
+$env:PORT="4177"; npm start
 ```
 
-然后在浏览器打开 [http://127.0.0.1:4173](http://127.0.0.1:4173)。如果 4173 端口被占用，可在 Windows PowerShell 中运行 `$env:PORT="4177"; npm start`，再打开 `http://127.0.0.1:4177`。
+然后打开 <http://127.0.0.1:4177>。
 
-### 已经下载过旧版本？
+## 客户能直接得到什么
 
-在项目目录执行：
+- **自动识别文章**：支持 Markdown、TXT、DOCX、PDF；DOCX/PDF 在本机提取文字。
+- **自动清理格式**：去除 `*`、`#`、反引号等 Markdown/排版标记，保留正文内容。
+- **自动提炼核心**：提取核心内容、生成标题候选、同步摘要和封面文案。
+- **自动排版指导**：一键生成章节层级、图片位置与内容、爆款标题、综合建议；每条建议都保留“带入指令”。
+- **自动匹配图片**：按文章长度、章节密度和图片语义安排正文配图，不会无上限塞图。
+- **自动生成封面**：头条封面统一转换为 PNG/JPEG，标准尺寸为 **900×383**，自动居中裁剪。
+- **手机效果预览**：右侧实时查看标题、摘要、正文、图片和封面在手机中的效果。
+- **重点局部标注**：识别重点词、金句、标题、核心句及“第 N”“一～N/一-N”，只标注重点，不整篇涂满。
+- **反复换稿**：支持清空重新上传，最近 12 篇文章可在本机记录中打开或删除。
+- **本地素材库**：图片可跨文章复用，也可以直接拖到“头条封面”。
+- **微信交付**：导出微信兼容 HTML、本地草稿包；配置公众号接口后可提交远程草稿箱。
+
+## 微信发布怎么工作
+
+默认是本地模式：点击“导出到微信草稿箱”时，可以先生成本地草稿包。
+
+需要直接提交公众号草稿箱时，再配置以下任一方式：
+
+- `WECHAT_ACCESS_TOKEN`
+- `WECHAT_APP_ID` + `WECHAT_APP_SECRET`
+
+微信头条封面必须是 PNG/JPEG。系统提交前会再次检查标题、作者、摘要、正文大小、图片格式和封面尺寸。
+
+扫码授权需要真实的授权适配器：
+
+- 配置 `WECHAT_QR_AUTH_URL`：本机根据授权入口生成二维码。
+- 配置 `WECHAT_QR_IMAGE_URL`：直接显示已有二维码。
+- 授权适配器扫码完成后，将 `access_token` POST 到本机回调地址。
+
+微信官方草稿接口本身不提供扫码登录；没有真实授权入口时，系统不会生成无效二维码。
+
+## 隐私与安全
+
+- 文章、图片、原稿、素材库和授权配置默认只在本机处理。
+- `.local-data/` 已加入 Git 忽略，不会提交到 GitHub。
+- AppSecret、Token、私钥、个人信息、IP 地址和本地文章不会写入公开代码或 README。
+- DOCX/PDF 识别默认走本机 `127.0.0.1`；扫描版 PDF 当前暂不包含 OCR。
+- 发布到公众号前仍建议人工审核标题、摘要、封面和正文。
+
+## 常用功能
+
+### 图形界面
 
 ```bash
-git fetch origin
-git switch main
-git pull --ff-only origin main
 npm start
 ```
 
-启动前可运行 `git log -1 --oneline`，应看到最新的合并提交，而不是旧版 `0.1.0`。
+### 本地检查
 
-## 更新策略：升级代码，不覆盖用户数据
+```bash
+npm run check
+npm test
+```
 
-每次发布新版后，在已有项目目录执行：
+### 命令行
+
+```bash
+npm run cli -- import --article article.md --images ./images
+npm run cli -- guidance
+npm run cli -- export --out article.html
+npm run cli -- publish --out .local-data/publish/latest
+```
+
+### 本地公众号配置
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\configure-local.ps1 -AppId "你的AppID" -Port 4173
+```
+
+AppSecret 使用隐藏输入，仅保存为 Windows DPAPI 保护的本地配置，不会写入命令历史。
+
+## 已下载旧版本，如何更新
+
+在项目目录执行：
 
 ```bash
 git fetch origin
@@ -68,82 +129,16 @@ npm test
 npm start
 ```
 
-更新行为如下：
+更新代码不会主动删除 `.local-data/`、浏览器文章、素材库或本地授权配置。升级前仍建议备份 `.local-data/`。
 
-- Git 会按文件合并/更新程序代码、文档和测试；已修改的文件会以新版为准，相当于局部覆盖。
-- `.local-data/` 被 Git 忽略，文章状态、素材库、授权配置不会被代码更新删除。
-- 浏览器中的文章和素材保存在本机 `localStorage`，刷新或升级代码不会主动清空。
-- 如果你手动改过代码，更新时 Git 会停止并提示冲突，不会静默覆盖；先备份或使用 `git stash`，确认后再合并。
-- 不建议每次重新下载 ZIP 并覆盖整个旧目录；优先使用上面的 `git pull` 更新方式。
+## v0.1.2 更新内容
 
-重要升级前仍建议备份 `.local-data/`。如需回到旧版本，可使用 Git 回退到指定提交，文章和素材数据仍独立保留。
+- 优化三栏工作台、按钮、卡片、预览舞台和状态反馈的视觉层级。
+- 手机预览与公众号提交统一使用真实 **900×383** 居中封面。
+- 修复图片元数据尺寸不准确时的封面漏检问题。
+- 页面重新渲染后保留编辑器、素材库和预览区域的滚动位置。
+- README 改为面向客户的中文快速说明。
 
-## 已实现
+## 许可证
 
-- 文字指令 → 文档状态 → GUI/预览同步
-- GUI 可视化直接编辑 → 文档状态 → 右侧预览同步
-- 微信文章实时预览，60%–140% 独立缩放；缩放不修改文档数据- 文章块新增 / 修改 / 删除 / 上下移动
-- 本地图片素材库、点击插入文章
-- “我的素材”中的图片支持直接拖入“头条封面”替换；SVG 也可拖入，提交微信前会自动转为 PNG/JPEG
-- 自动局部重点标注：识别重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号，只对对应文字加粗或加浅色标记
-- 文章记录：清空当前稿件后可重新上传，最近 12 篇已上传/保存文章保留在本机，可随时打开或删除记录
-- Markdown / TXT / DOCX / PDF + 多图片拖放导入，自动识别标题、章节、段落、引用和图片引用；DOCX/PDF 会在本机提取文字并清理 `*`、`#`、反引号等 Markdown/排版标记
-- 内容驱动的智能视觉编排：自动提炼核心内容、生成一张标题图，并按章节语义匹配素材或生成本地创意 SVG 占位图
-- 封面一键设置：根据封面与内容摘要设置区，智能复用素材库中的合规封面，置为文章首图，并依据核心提炼结果同步摘要、封面主文案和副文案
-- 独立封面与摘要设置区：封面素材、900×383 头条比例、主/副文案和 ≤128 字摘要集中编辑，右侧预览按公众号顺序同步
-- 智能标题工作流：从全文生成摘要和 5 个证据绑定的爆款标题候选，自动采用第一候选，人工选择任一候选后即锁定标题
-- 跨文章本地素材库：导入的新图和自动生成创意图会自动入库；下一篇文章可按语义复用并自动填充，素材库容量 200 张
-- 智能配图数量：点击“智能配图与标题”或“图片智能导入”时，会按正文篇幅与章节密度计算正文配图预算，再将素材/创意图分布到合适章节；已有图片会计入预算，素材库不会被无上限追加，支持回滚
-- 图片智能导入：读取图片文件名、alt/描述以及可选的 OCR/视觉标签，识别图片内容后与章节语义匹配，将预算范围内的素材库图片一键放到文章相应位置
-- 主流程为“导入文章+图片 → 自动总结/配图/入库 → 人工编排 → 导出到微信草稿箱”；素材库可单独上传，也会接收导入与生成结果
-- 自动排版指导面板：点击“一键生成”后，一次完成标题/配图编排，并按章节层级、图片位置/内容、爆款标题和综合建议分组生成本地指导；每条结果仍可“带入指令”作人工微调
-- PingPongGrowth 创作画像：按公众号定位、读者、语气和关键词分析文章，并生成标题/结构/CTA 建议
-- 自然语言指导编辑：区块转换、长段落拆分、按序号修改、组件创建
-- 本地 Humanizer：自然化 / 保守调整两种模式，原稿可回滚
-- 冻结语义组件：列表、表格、CTA、画廊、媒体，并支持 Markdown/指令创建
-- 五套 MVP 主题：极简、杂志、清新、墨韵、暖阳；切换主题会同步改变工作区、编辑器和右侧预览
-- “一键检测”：按微信公众号字段、正文、封面和排版建议统一检查，先自动修正可安全修正项，再提示仍需人工处理的内容
-- “智能优化发布约束”：点击后自动蒸馏正文、同步标题/作者/摘要/封面主副文案，并按“封面 → 标题 → 作者/时间 → 内容摘要 → 正文”动态重排公众号预览；原稿始终保留
-- 封面辅助：按 900×383 / 383×383 规范生成 SVG 候选，检查比例与文件大小，最终由人工确认
-- 微信交付包：导出微信兼容 HTML、草稿 payload 和 manifest；配置接口后可提交远程草稿，提交前会在本机自动将文章使用的 SVG 图片转换为 PNG，原始 SVG 仍保留在编辑器预览中
-- 本机接口请求失败时会显示具体阶段（读取状态、识别文档、上传图片或提交草稿）及连接/接口原因，不再只显示泛化的 `fetch failed`
-- 扫码授权：配置真实的 `WECHAT_QR_AUTH_URL` 后，二维码由本机自动生成并显示；扫码完成仍由授权适配器把 `access_token` POST 回本机，凭据只保存到本机 `.local-data`
-- Harness JS API，可由外部 Agent/自动化层调用
-- 时间戳 + revision 序列号版本机制
-- 最多 50 个编辑版本，支持 Undo / Redo
-- localStorage 本地持久化
-- DOCX/PDF 仅通过本机 `127.0.0.1` 识别；当前支持文本型 PDF，扫描版 PDF 暂不包含 OCR，原始文件内容不会上传到云端
-- 内部文档状态 JSON（供 CLI/MCP 与自动化交换；普通用户无需手动处理）
-- Node 原生测试；DOCX/PDF 解析器作为本地运行依赖安装，不向云端传输稿件
-
-## 启动
-
-```bash
-cd wechat-layout-mvp
-npm run test
-npm start
-```
-
-浏览器打开：`http://127.0.0.1:4173`
-CLI / MCP 接入：
-
-```bash
-npm run cli -- import --article article.md --images ./images
-npm run cli -- import --text "文章内容" --image ./cover.png
-npm run cli -- guidance
-npm run cli -- cover --out .local-data/cover
-npm run cli -- cover-import --image ./assets/covers/draftloom-wechat-preview-cover.jpg --width 900 --height 383
-npm run cli -- visuals --max-generated 3
-npm run cli -- cover-set
-npm run cli -- viral-title
-npm run cli -- assets-fill
-npm run cli -- growth
-npm run cli -- growth-brief
-npm run cli -- wechat-check
-npm run cli -- wechat-optimize
-npm run cli -- text --text "标题：AI 时代的个人工作台"
-npm run cli -- humanize --mode natural
-npm run cli -- export --out article.html
-npm run cli -- publish --out .local-data/publish/latest
-npm run cli -- draft-status
-npm run cli -- draft-submit --confirm true
+本项目采用仓库中的 [LICENSE](LICENSE) 文件所示许可证。
