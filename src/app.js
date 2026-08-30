@@ -1,4 +1,4 @@
-import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, THEMES, normalizeTheme, renderDocumentBody, renderArticleHtml, renderInlineEmphasis } from './core.js';
+import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, THEMES, normalizeTheme, renderDocumentBody, renderArticleHtml, renderInlineEmphasis } from './core.js';
 import { analyzeGrowth, getDefaultGrowthProfile, growthBrief, normalizeGrowthProfile } from './growth.js';
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, formatBytes } from './wechat-limits.js';
 import { APP_VERSION } from './version.js';
@@ -25,6 +25,8 @@ let autoSubmitAfterAuth = false;
 let growthProfile = loadGrowthProfile();
 let growthReport = null;
 let lastWechatCheck = null;
+let autoGuidance = null;
+let draggedAssetId = null;
 
 function loadDocument() {
   try {
@@ -85,6 +87,7 @@ function clearCurrentArticle() {
   store = new VersionStore(doc);
   growthReport = null;
   lastWechatCheck = null;
+  autoGuidance = null;
   persist();
   render();
   setStatus('当前文章已清空，可重新上传；原稿已保存到文章记录');
@@ -119,6 +122,40 @@ function persist() {
   localStorage.setItem(ASSET_LIBRARY_KEY, JSON.stringify(doc.assets || []));
 }
 function esc(s='') { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function requestError(error, fallback = '本机接口请求失败') {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (/failed to fetch|fetch failed|networkerror|load failed/i.test(message)) {
+    const origin = window.location?.origin || 'http://127.0.0.1:4177';
+    return `${fallback}：无法连接本机服务（${origin}）。请确认本地服务正在运行，并从当前地址重新打开页面`;
+  }
+  return message.trim() || fallback;
+}
+async function fetchLocalApi(url, options = {}, label = '本机接口请求') {
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (error) {
+    throw new Error(requestError(error, label));
+  }
+  let raw = '';
+  try {
+    raw = await response.text();
+  } catch (error) {
+    throw new Error(`${label}：无法读取本机响应（HTTP ${response.status}）`);
+  }
+  let value = {};
+  if (raw.trim()) {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      throw new Error(`${label}：本机返回了无效结果（HTTP ${response.status}），请确认页面与本地服务使用同一个端口`);
+    }
+  }
+  if (!response.ok || value?.error) {
+    throw new Error(`${label}：${value?.error || value?.message || `HTTP ${response.status}`}`);
+  }
+  return value;
+}
 function assetById(id) { return doc.assets.find(a => a.id === id); }
 function currentCoverBlock() { return doc.blocks.find(block => block.type === 'image' && block.visualRole === 'cover') || doc.blocks.find(block => block.type === 'image') || null; }
 function currentCoverAsset() { const block = currentCoverBlock(); return block ? assetById(block.assetId) : null; }
@@ -146,7 +183,7 @@ function renderLibraryPane() {
   let assets = doc.assets.filter(asset => (!query || `${asset.name} ${asset.alt || ''}`.toLowerCase().includes(query)) && (assetFilter !== 'unused' || !assetInUse(asset.id)));
   if (assetSort === 'name') assets = [...assets].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
   const scopeLabel = libraryTab === 'resource' ? '本地资源库 · 可跨文章复用' : '先上传，后续可反复插入或替换';
-  const cards = assets.length ? assets.map(a => `<div class="asset-card" data-asset-card="${a.id}"><img src="${a.dataUrl}" alt="${esc(a.alt||a.name)}"><span title="${esc(a.name)}">${esc(a.name)}</span><small>${a.recognition?.labels?.length ? `识别：${esc(a.recognition.labels.slice(0, 2).join(' · '))}` : a.generated ? (assetInUse(a.id) ? '自动生成 · 删除会同步移除' : '自动生成 · 可替换') : assetInUse(a.id) ? '文章使用中 · 删除会同步移除' : '已入库 · 可删除'}</small><div class="asset-actions"><button data-asset-insert="${a.id}" title="在文章末尾插入">插入</button><button data-asset-replace="${a.id}" title="替换当前选中的图片">替换当前</button><button data-asset-delete="${a.id}" title="删除素材及文章中的图片">删除</button></div></div>`).join('') : `<div class="empty library-empty">${query ? '没有匹配的素材' : '暂无素材，可点击“上传素材”添加'}</div>`;
+  const cards = assets.length ? assets.map(a => { const drag = libraryTab === 'mine' ? ` draggable="true" data-asset-drag="${esc(a.id)}" aria-label="拖动 ${esc(a.name)} 到头条封面"` : ''; return `<div class="asset-card" data-asset-card="${esc(a.id)}"${drag}><img src="${a.dataUrl}" alt="${esc(a.alt||a.name)}"><span title="${esc(a.name)}">${esc(a.name)}</span><small>${a.recognition?.labels?.length ? `识别：${esc(a.recognition.labels.slice(0, 2).join(' · '))}` : a.generated ? (assetInUse(a.id) ? '自动生成 · 删除会同步移除' : '自动生成 · 可替换') : assetInUse(a.id) ? '文章使用中 · 删除会同步移除' : '已入库 · 可删除'}</small><div class="asset-actions"><button data-asset-insert="${esc(a.id)}" title="在文章末尾插入">插入</button><button data-asset-replace="${esc(a.id)}" title="替换当前选中的图片">替换当前</button><button data-asset-delete="${esc(a.id)}" title="删除素材及文章中的图片">删除</button></div></div>`; }).join('') : `<div class="empty library-empty">${query ? '没有匹配的素材' : '暂无素材，可点击“上传素材”添加'}</div>`;
   return `<div class="library-header"><div class="library-tabs">${tabs}</div><div class="library-toolbar"><input id="assetSearch" value="${esc(assetQuery)}" placeholder="搜索素材"><button data-library-sort title="${assetSort === 'name' ? '恢复最近添加排序' : '按名称排序'}">↕</button><button data-library-filter class="${assetFilter === 'unused' ? 'active' : ''}" title="只看未使用素材">⌁</button></div><div class="library-meta"><span>${scopeLabel}</span><span>${doc.assets.length}/${MAX_ASSETS}</span><label class="mini-button">+ 上传素材<input id="assetInput" type="file" accept="image/*" multiple hidden></label></div></div><div class="asset-grid">${cards}</div><div class="library-footer"><span>支持批量上传 · 大图自动压缩</span><button data-clear-unused>清理未使用</button></div>`;
 }
 function refreshLibraryPane() {
@@ -190,7 +227,7 @@ function renderTitlePlan() {
 
 function renderCoverSummaryPanel() {
   const cover = currentCoverAsset();
-  const imageAssets = doc.assets.filter(asset => asset?.dataUrl && WECHAT_LIMITS.titleImage.acceptedTypes.includes(String(asset.type || '').toLowerCase()));
+  const imageAssets = doc.assets.filter(asset => asset?.dataUrl && /^data:image\//i.test(asset.dataUrl));
   const coverCheck = cover ? inspectWechatCover({ width: cover.width, height: cover.height, bytes: cover.size, type: cover.type, main: cover.coverMain || doc.title || '', sub: cover.coverSub || doc.subtitle || '' }) : null;
   const coverOptions = imageAssets.length
     ? imageAssets.map(asset => `<option value="${esc(asset.id)}" ${cover?.id === asset.id ? 'selected' : ''}>${esc(asset.name)}</option>`).join('')
@@ -200,7 +237,7 @@ function renderCoverSummaryPanel() {
     : '尚未设置封面；公众号草稿必须有头条封面图';
   const core = doc.meta?.visualPlan?.coreContent;
   const coreMarkup = core?.summary ? `<div class="core-content-summary"><b>核心提炼</b><span>${esc(core.summary)}</span></div>` : '';
-  return `<section class="cover-summary-panel"><div class="cover-summary-head"><div><h3>公众号封面与内容摘要</h3><span>独立设置区 · 按公众号字段 1:1 复刻并同步右侧预览</span></div><div class="cover-summary-actions"><button id="titleImageAutoBtn" type="button" class="primary-button" title="在本机提炼文章核心内容，并生成一张 900×383 标题图片">提炼核心并生成标题图</button><button id="coverAutoBtn" type="button" title="根据核心提炼内容同步摘要、封面主文案和副文案">封面一键设置</button></div></div>${coreMarkup}<div class="cover-summary-grid"><div class="cover-slot">${cover?.dataUrl ? `<img src="${cover.dataUrl}" alt="${esc(cover.alt || '公众号封面')}">` : '<div class="cover-slot-empty">封面图片<br>900×383</div>'}<span>头条封面 · 900×383</span></div><div class="cover-summary-fields"><label>封面素材<select id="coverAssetSelect">${coverOptions}</select></label><div class="cover-copy-row"><label>封面主文案<input id="coverMainInput" maxlength="${WECHAT_LIMITS.titleImage.mainChars}" value="${esc(cover?.coverMain || doc.title || '')}" placeholder="最多 10 字"></label><label>封面副文案<input id="coverSubInput" maxlength="${WECHAT_LIMITS.titleImage.subChars}" value="${esc(cover?.coverSub || doc.subtitle || '')}" placeholder="最多 14 字"></label></div><label>内容摘要<textarea id="subtitleInput" maxlength="${WECHAT_LIMITS.digestChars}" rows="2" placeholder="最多 128 字">${esc(doc.subtitle || '')}</textarea></label><div class="cover-summary-meta"><span>${esc(statusText)}</span><span>摘要 ${(doc.subtitle || '').length}/${WECHAT_LIMITS.digestChars} 字</span></div></div></div></section>`;
+  return `<section class="cover-summary-panel"><div class="cover-summary-head"><div><h3>公众号封面与内容摘要</h3><span>独立设置区 · 按公众号字段 1:1 复刻并同步右侧预览</span></div><div class="cover-summary-actions"><button id="titleImageAutoBtn" type="button" class="primary-button" title="在本机提炼文章核心内容，并生成一张 900×383 标题图片">提炼核心并生成标题图</button><button id="coverAutoBtn" type="button" title="根据核心提炼内容同步摘要、封面主文案和副文案">封面一键设置</button></div></div>${coreMarkup}<div class="cover-summary-grid"><div class="cover-slot" data-cover-dropzone="true" aria-label="头条封面拖放区域">${cover?.dataUrl ? `<img src="${cover.dataUrl}" alt="${esc(cover.alt || '公众号封面')}">` : '<div class="cover-slot-empty">封面图片<br>900×383</div>'}<span>头条封面 · 900×383</span><small class="cover-drop-hint">将“我的素材”图片拖到这里可直接替换</small></div><div class="cover-summary-fields"><label>封面素材<select id="coverAssetSelect">${coverOptions}</select></label><div class="cover-copy-row"><label>封面主文案<input id="coverMainInput" maxlength="${WECHAT_LIMITS.titleImage.mainChars}" value="${esc(cover?.coverMain || doc.title || '')}" placeholder="最多 10 字"></label><label>封面副文案<input id="coverSubInput" maxlength="${WECHAT_LIMITS.titleImage.subChars}" value="${esc(cover?.coverSub || doc.subtitle || '')}" placeholder="最多 14 字"></label></div><label>内容摘要<textarea id="subtitleInput" maxlength="${WECHAT_LIMITS.digestChars}" rows="2" placeholder="最多 128 字">${esc(doc.subtitle || '')}</textarea></label><div class="cover-summary-meta"><span>${esc(statusText)}</span><span>摘要 ${(doc.subtitle || '').length}/${WECHAT_LIMITS.digestChars} 字</span></div></div></div></section>`;
 }
 
 function renderGrowthPanel() {
@@ -221,6 +258,7 @@ function commit(intent, label) {
   if (!finalResult.changed) { setStatus(intent.type === 'optimizeWechat' ? '微信发布约束检查完成，无需修改' : '没有可应用的变化'); return false; }
   selectedId = finalResult.selectedId;
   doc = store.commit(finalResult.doc, label);
+  autoGuidance = null;
   let statusLabel = label;
   if (intent.type === 'autoComposeVisuals') {
     const placements = doc.meta?.visualPlan?.placements || [];
@@ -250,6 +288,7 @@ function autoOptimizeLoadedDocument(){
   if(!automatic.changed)return null;
   selectedId=automatic.selectedId;
   doc=store.commit(automatic.doc,'加载时自动微信约束优化');
+  autoGuidance = null;
   persist();
   return automatic.optimization;
 }
@@ -275,7 +314,7 @@ function render() {
       <section class="panel editor-panel">
         <div id="importDrop" class="import-drop"><strong>拖入文章、DOCX、PDF 或图片，自动排版</strong><span>DOCX/PDF 在本机识别并自动清理 *、#、反引号等特殊标记；随后总结正文、生成爆款标题与标题图，导入后可继续人工调整</span></div>
         <div class="command-box"><div class="command-label">文字指令</div><div class="command-row"><textarea id="commandInput" rows="1" placeholder="如：把当前改成引用 / 拆分当前段落 / 添加表格：列1|列2"></textarea><button id="runCommand">执行</button></div><div class="hint">支持按区块转换、拆分、主题切换和组件创建；表格可用换行或分号分隔；未识别的文字会作为新段落。</div></div>
-        <div class="guidance-box"><div class="command-label">自动排版指导</div><div id="guidanceList">${renderGuidance()}</div></div>
+        <div class="guidance-box"><div class="guidance-head"><div class="command-label">自动排版指导</div><button id="guidanceGenerateBtn" class="guidance-generate-button" type="button" title="根据当前文章自动生成章节、图片、标题和发布建议">一键生成</button></div><div id="guidanceList">${renderGuidance()}</div></div>
         ${renderWechatLimits()}
         <div class="humanizer-box"><div class="command-label">去 AI 味</div><div class="humanizer-row"><select id="humanizerMode"><option value="natural" ${doc.meta.humanizer?.mode === 'natural' ? 'selected' : ''}>自然化</option><option value="conservative" ${doc.meta.humanizer?.mode === 'conservative' ? 'selected' : ''}>保守调整</option></select><button id="humanizeBtn">应用到正文</button></div><div class="hint">本地确定性处理，原稿保存在导入记录中，可随时回滚。</div></div>
         ${renderCoverSummaryPanel()}
@@ -341,11 +380,14 @@ function renderPreview() {
 }
 
 function renderGuidance() {
-  return getLayoutGuidance(doc).map(item => {
+  const renderItem = item => {
     const icon = item.level === 'ok' ? '✓' : item.level === 'error' ? '!' : '•';
     const action = item.command ? `<button class="guidance-action" data-guidance="${esc(item.command)}">带入指令</button>` : '';
     return `<div class="guidance-item guidance-${item.level}"><span>${icon}</span><p>${esc(item.text)}</p>${action}</div>`;
-  }).join('');
+  };
+  if (!autoGuidance) return getLayoutGuidance(doc).map(renderItem).join('');
+  const sections = autoGuidance.sections.map(section => `<section class="guidance-section"><div class="guidance-section-head"><b>${esc(section.title)}</b><span>${section.items.length} 项</span></div><div class="guidance-section-list">${section.items.map(renderItem).join('')}</div></section>`).join('');
+  return `<div class="guidance-generated-note">已根据当前文章生成 ${autoGuidance.itemCount} 项指导，建议确认后再带入指令执行。</div>${sections}`;
 }
 
 function getWechatDraftValidation() {
@@ -574,6 +616,49 @@ function bindLibraryEvents() {
   const copyScript = document.querySelector('[data-copy-script]');
   if (copyScript) copyScript.onclick = async () => { const source = doc.original?.text || ''; try { await navigator.clipboard.writeText(source); setStatus('文字稿已复制'); } catch { setStatus('复制失败，请手动选择文字稿'); } };
 }
+function clearCoverDragState() {
+  draggedAssetId = null;
+  document.querySelectorAll('[data-cover-dropzone]').forEach(zone => zone.classList.remove('drag-over'));
+  document.querySelectorAll('[data-asset-drag]').forEach(card => card.classList.remove('dragging'));
+}
+function bindCoverDragEvents() {
+  document.querySelectorAll('[data-asset-drag]').forEach(card => {
+    card.ondragstart = event => {
+      draggedAssetId = card.dataset.assetDrag;
+      card.classList.add('dragging');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'copy';
+        event.dataTransfer.setData('text/plain', draggedAssetId);
+      }
+    };
+    card.ondragend = clearCoverDragState;
+  });
+  const zone = document.querySelector('[data-cover-dropzone]');
+  if (!zone) return;
+  zone.ondragenter = event => {
+    event.preventDefault();
+    zone.classList.add('drag-over');
+  };
+  zone.ondragover = event => {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    zone.classList.add('drag-over');
+  };
+  zone.ondragleave = event => {
+    if (!zone.contains(event.relatedTarget)) zone.classList.remove('drag-over');
+  };
+  zone.ondrop = event => {
+    event.preventDefault();
+    const assetId = event.dataTransfer?.getData('text/plain') || draggedAssetId;
+    const asset = assetById(assetId);
+    clearCoverDragState();
+    if (!asset) {
+      setStatus('请从“我的素材”拖入一张图片');
+      return;
+    }
+    commit({ type: 'setCoverAsset', assetId: asset.id }, '拖入素材设置头条封面');
+  };
+}
 function bindArticleHistoryEvents() {
   const save = document.querySelector('#saveArticleBtn');
   if (save) save.onclick = saveCurrentArticle;
@@ -625,6 +710,12 @@ function bindEvents() {
   document.querySelector('#titleImageAutoBtn').onclick=()=>commit({type:'generateTitleImage'},'提炼核心并生成标题图');
   document.querySelector('#assetAutoFillBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:false,maxGenerated:0,autoImageCount:true,fillUnmatched:true,titleMode:'safe'},'图片智能导入');
   document.querySelector('#wechatCheckBtn').onclick=runWechatCheck;
+  document.querySelector('#guidanceGenerateBtn').onclick=()=>{
+    commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral'},'自动排版一键生成');
+    autoGuidance = generateLayoutGuidance(doc);
+    render();
+    setStatus(`自动排版一键生成完成：已同步标题、配图和 ${autoGuidance.itemCount} 项指导；带入指令可选`);
+  };
   document.querySelector('#wechatOptimizeBtn').onclick=()=>autoRepairWechatConstraints('智能优化微信发布约束').then(() => {
     const validation = getWechatDraftValidation();
     document.querySelectorAll('.editor-panel .wechat-limits').forEach(el => { el.outerHTML = renderWechatLimits(validation); });
@@ -636,15 +727,16 @@ function bindEvents() {
   document.querySelector('#localDraftBtn').onclick=()=>{exportDraftBundle();document.querySelector('#draftDialog')?.close();};
   document.querySelector('#submitDraftBtn').onclick=submitDraftToWechat;  document.querySelector('#exportHtmlBtn').onclick=exportHtml;
   document.querySelector('#articleImportInput').onchange=e=>handleArticleImport(e.target.files);
-  document.querySelector('#clearArticleBtn').onclick=clearCurrentArticle;
+   document.querySelector('#clearArticleBtn').onclick=clearCurrentArticle;
   const drop = document.querySelector('#importDrop');
   drop.onclick=()=>document.querySelector('#articleImportInput').click();
   drop.ondragover=e=>{e.preventDefault();drop.classList.add('dragging');};
   drop.ondragleave=()=>drop.classList.remove('dragging');
   drop.ondrop=e=>{e.preventDefault();drop.classList.remove('dragging');const files=e.dataTransfer.files;if(files.length)handleArticleImport(files);else{const text=e.dataTransfer.getData('text/plain');if(text)handleArticleImport([],text);}};
-  document.querySelectorAll('[data-guidance]').forEach(el=>el.onclick=()=>{const input=document.querySelector('#commandInput');input.value=el.dataset.guidance;input.focus();});
-  bindLibraryEvents();
-  bindArticleHistoryEvents();
+   document.querySelectorAll('[data-guidance]').forEach(el=>el.onclick=()=>{const input=document.querySelector('#commandInput');input.value=el.dataset.guidance;input.focus();});
+   bindLibraryEvents();
+   bindCoverDragEvents();
+   bindArticleHistoryEvents();
   const growthAnalyzeButton = document.querySelector('#growthAnalyze');
   if (growthAnalyzeButton) growthAnalyzeButton.onclick = () => {
     growthProfile = normalizeGrowthProfile({
@@ -716,8 +808,7 @@ async function openDraftDialog(){
   const validation=getWechatDraftValidation();
   renderDraftLimitBox(validation);
   try {
-    const response=await fetch('/api/wechat/status');
-    const value=await response.json();
+    const value=await fetchLocalApi('/api/wechat/status', {}, '读取微信接口状态');
     statusEl.textContent=!validation.ok?`当前文章不能提交：${validation.errors[0].message}`:value.authorized?(autoSubmitAfterAuth?'授权成功，正在上传图片并创建公众号草稿…':'已完成公众号授权，本机凭据会自动复用。'):value.remoteReady?'已检测到微信接口配置，可提交草稿。':'当前为本地模式：尚未完成公众号授权。';
     statusEl.className=`draft-status ${value.remoteReady?'ready':'local'}`;
     renderAuthBox(value);
@@ -727,7 +818,12 @@ async function openDraftDialog(){
     clearTimeout(authPollTimer);
     if (!value.authorized) authPollTimer=setTimeout(()=>{ if(dialog.open) openDraftDialog(); }, 2500);
     else if (autoSubmitAfterAuth) { autoSubmitAfterAuth=false; clearTimeout(authPollTimer); await submitDraftToWechat({skipConfirm:true}); }
-  } catch { statusEl.textContent=validation.ok?'本地服务未提供微信接口状态，将只生成本地草稿包。':`当前文章不能提交：${validation.errors[0].message}`; statusEl.className='draft-status local'; }
+  } catch(error) {
+    const message=requestError(error, '读取微信接口状态失败');
+    statusEl.textContent=validation.ok?`${message}。当前只能生成本地草稿包。`:`当前文章不能提交：${validation.errors[0].message}（${message}）`;
+    statusEl.className='draft-status local error';
+    renderAuthBox({ statusError: message });
+  }
 }
 function renderAuthBox(value={}){
   const qrBox=document.querySelector('#qrAuthBox');
@@ -736,7 +832,9 @@ function renderAuthBox(value={}){
   const image=value.qrImageUrl?`<img class="qr-auth-image" src="${esc(value.qrImageUrl)}" alt="公众号授权二维码">`:'';
   const link=value.qrAuthUrl?`<a href="${esc(value.qrAuthUrl)}" target="_blank" rel="noreferrer">在新窗口打开授权页</a>`:'';
   const callback=value.callbackUrl?`<code>${esc(value.callbackUrl)}</code>`:'';
-  if (value.qrAuthorization) {
+  if (value.statusError) {
+    qrBox.innerHTML=`<strong>微信接口状态读取失败</strong><p>${esc(value.statusError)}</p><small>请确认本机服务正在运行，并从当前服务地址重新打开页面。</small>`;
+  } else if (value.qrAuthorization) {
     qrBox.innerHTML=`<strong>扫码授权公众号</strong>${image}<div>${link}</div><small>${value.qrGenerated?'二维码已由本机根据授权入口自动生成。':''}扫码完成后等待本窗口自动刷新。授权适配器回调地址：${callback}</small>`;
   } else if (value.remoteReady) {
     qrBox.innerHTML=`<strong>已检测到本机授权配置</strong><p>当前无需扫码：本机已加载加密保存的公众号接口配置。点击“提交到公众号草稿箱”会直接上传图片并创建草稿，完成后请在公众号后台人工审核发送。</p><small>如需改用二维码授权，请配置 WECHAT_QR_IMAGE_URL（二维码图片）或 WECHAT_QR_AUTH_URL（授权页）。</small>`;
@@ -753,9 +851,7 @@ async function submitDraftToWechat({skipConfirm=false}={}){
     const validation=getWechatDraftValidation();
     renderDraftLimitBox(validation);
     if(!validation.ok){ statusEl.className='draft-status local error'; statusEl.textContent=`提交已阻止：${validation.errors[0].message}`; setStatus(`草稿导出已阻止：${validation.errors[0].message}`); return; }
-    const statusResponse=await fetch('/api/wechat/status');
-    if (!statusResponse.ok) { exportDraftBundle(); document.querySelector('#draftDialog')?.close(); setStatus('本地服务尚未重启，已生成本地微信草稿包'); return; }
-    const statusInfo=await statusResponse.json();
+    const statusInfo=await fetchLocalApi('/api/wechat/status', {}, '读取微信接口状态');
     if(!statusInfo.remoteReady){
       if(statusInfo.qrAuthorization){
         if(!window.confirm('确认扫码授权后自动上传图片并创建公众号草稿吗？完成后仍需在公众号后台人工审核发送。'))return;
@@ -767,9 +863,7 @@ async function submitDraftToWechat({skipConfirm=false}={}){
     }
     if(!skipConfirm && !window.confirm('确认将当前文章提交到已配置的公众号草稿箱吗？'))return;
     statusEl.textContent='正在上传图片并提交草稿…';
-    const response=await fetch('/api/wechat/draft',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({doc,confirm:true})});
-    const result=await response.json();
-    if(!response.ok||result.error)throw new Error(result.error||'提交失败');
+    const result=await fetchLocalApi('/api/wechat/draft',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({doc,confirm:true})},'提交到公众号草稿箱');
     const submitted=result.delivery?.status==='submitted';
     const draftId=result.delivery?.draftId?String(result.delivery.draftId):'';
     if(submitted){
@@ -783,15 +877,12 @@ async function submitDraftToWechat({skipConfirm=false}={}){
       statusEl.textContent='已生成本地草稿包。';
       setStatus('已生成本地微信草稿包');
     }
-  } catch(error) { statusEl.className='draft-status local error'; statusEl.textContent=`提交失败：${error.message}`; setStatus(`草稿导出失败：${error.message}`); }
+  } catch(error) { const message=requestError(error, '提交到公众号草稿箱失败'); statusEl.className='draft-status local error'; statusEl.textContent=`提交失败：${message}`; setStatus(`草稿导出失败：${message}`); }
 }async function readArticleFile(file){
   const kind=getArticleFileKind(file);
   if(kind==='text') return {text:await file.text(),kind,warnings:[]};
   if(kind!=='docx'&&kind!=='pdf') throw new Error(`不支持导入文件：${file.name||'未命名文件'}`);
-  const response=await fetch('/api/extract-document',{method:'POST',headers:{'content-type':file.type||'application/octet-stream','x-file-name':encodeURIComponent(file.name||`document.${kind}`)},body:await file.arrayBuffer()});
-  let result={};
-  try { result=await response.json(); } catch { throw new Error('本地文档识别服务返回了无效结果'); }
-  if(!response.ok||result.error) throw new Error(result.error||'本地文档识别失败');
+  const result=await fetchLocalApi('/api/extract-document',{method:'POST',headers:{'content-type':file.type||'application/octet-stream','x-file-name':encodeURIComponent(file.name||`document.${kind}`)},body:await file.arrayBuffer()},`识别 ${kind.toUpperCase()} 文档`);
   if(!String(result.text||'').trim()) throw new Error(`${kind.toUpperCase()} 未识别出可用文字；扫描版 PDF 暂不支持 OCR`);
   return result;
 }

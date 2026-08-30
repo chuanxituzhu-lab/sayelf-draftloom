@@ -8,6 +8,7 @@ import { analyzeGrowth, getDefaultGrowthProfile, growthBrief } from '../src/grow
 import { draftCoverCopy, renderCoverSvg, auditCoverImage, COVER_SPEC } from '../src/cover.js';
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, charCount } from '../src/wechat-limits.js';
 import { applyProtectedLocalConfig } from './local-config.mjs';
+import { normalizeWechatAsset, parseImageDataUrl } from './wechat-media.mjs';
 
 applyProtectedLocalConfig(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
 const args = process.argv.slice(2);
@@ -129,15 +130,21 @@ async function importFromInput() {
   return { ...state, guidance: getLayoutGuidance(state.doc), warnings: state.doc.meta.importWarnings || [] };
 }
 function renderHtml(doc) { return renderArticleHtml(doc); }
-function dataUrlParts(dataUrl = '') {
-  const match = String(dataUrl).match(/^data:([^;]+);base64,([\s\S]+)$/);
-  return match ? { type: match[1], bytes: Buffer.from(match[2], 'base64') } : null;
-}
+function dataUrlParts(dataUrl = '') { return parseImageDataUrl(dataUrl); }
 function readPersistedAuth() {
   try {
     const saved = JSON.parse(readFileSync(resolve('.local-data/wechat-auth.json'), 'utf8'));
     return saved?.access_token && (!saved.expires_at || Date.parse(saved.expires_at) > Date.now() + 30_000) ? saved : null;
   } catch { return null; }
+}
+async function fetchWechat(url, options = {}, label = '微信接口请求') {
+  try {
+    return await fetch(url, options);
+  } catch (error) {
+    const code = error?.cause?.code;
+    const suffix = code ? `（网络错误 ${code}）` : '';
+    throw new Error(`${label}失败：无法连接微信接口${suffix}。请检查网络、防火墙、代理或公众号接口配置后重试`);
+  }
 }
 async function resolveWechatAccessToken() {
   if (process.env.WECHAT_ACCESS_TOKEN || process.env.WX_ACCESS_TOKEN) return process.env.WECHAT_ACCESS_TOKEN || process.env.WX_ACCESS_TOKEN;
@@ -147,7 +154,7 @@ async function resolveWechatAccessToken() {
   const appSecret = process.env.WECHAT_APP_SECRET || process.env.WX_APPSECRET;
   if (!appId || !appSecret) return null;
   const url = `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(appSecret)}`;
-  const response = await fetch(url);
+  const response = await fetchWechat(url, {}, '获取微信 access_token');
   const body = await response.json();
   if (!response.ok || !body.access_token) throw new Error(`获取微信 access_token 失败：${describeWechatError(body) || response.status}`);
   return body.access_token;
@@ -194,7 +201,7 @@ async function uploadWechatArticleImage(asset, token) {
   form.append('media', new Blob([parts.bytes], { type: parts.type }), asset.name);
   const endpoint = process.env.WECHAT_IMAGE_UPLOAD_URL || 'https://api.weixin.qq.com/cgi-bin/media/uploadimg';
   const joiner = endpoint.includes('?') ? '&' : '?';
-  const response = await fetch(`${endpoint}${joiner}access_token=${encodeURIComponent(token)}`, { method: 'POST', body: form });
+  const response = await fetchWechat(`${endpoint}${joiner}access_token=${encodeURIComponent(token)}`, { method: 'POST', body: form }, '上传微信图文图片');
   const body = await response.json();
   if (!response.ok || !body.url) throw new Error(`上传微信图文图片失败：${describeWechatError(body) || response.status}`);
   return body.url;
@@ -208,7 +215,7 @@ async function uploadWechatCover(asset, token) {
   form.append('media', new Blob([parts.bytes], { type: parts.type }), asset.name || 'cover.jpg');
   const endpoint = process.env.WECHAT_COVER_UPLOAD_URL || 'https://api.weixin.qq.com/cgi-bin/material/add_material';
   const joiner = endpoint.includes('?') ? '&' : '?';
-  const response = await fetch(`${endpoint}${joiner}type=image&access_token=${encodeURIComponent(token)}`, { method: 'POST', body: form });
+  const response = await fetchWechat(`${endpoint}${joiner}type=image&access_token=${encodeURIComponent(token)}`, { method: 'POST', body: form }, '上传微信封面');
   const body = await response.json();
   if (!response.ok || !body.media_id || Number(body.errcode || 0) !== 0) throw new Error(`上传微信封面失败：${describeWechatError(body) || response.status}`);
   return body.media_id;
@@ -244,6 +251,11 @@ async function publishFromState({ allowRemote = false } = {}) {
   let coverValidation = null;
   if (endpoint && token) {
     const officialApi = endpoint.includes('api.weixin.qq.com');
+    if (officialApi) {
+      renderDoc = clone(state.doc);
+      const usedAssetIds = new Set(renderDoc.blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])].filter(Boolean)));
+      renderDoc.assets = await Promise.all(renderDoc.assets.map(asset => usedAssetIds.has(asset.id) ? normalizeWechatAsset(asset) : asset));
+    }
     let thumbMediaId = option('cover-media-id', process.env.WECHAT_COVER_MEDIA_ID || null);
     if (officialApi && !thumbMediaId) {
       const coverBlock = renderDoc.blocks.find(block => block.type === 'image' && renderDoc.assets.some(asset => asset.id === block.assetId));
@@ -254,7 +266,6 @@ async function publishFromState({ allowRemote = false } = {}) {
       thumbMediaId = await uploadWechatCover(coverAsset, token);
     }
     if (officialApi && renderDoc.blocks.some(block => block.type === 'image' || block.type === 'gallery')) {
-      renderDoc = clone(state.doc);
       for (const asset of renderDoc.assets) {
         if (!renderDoc.blocks.some(block => block.assetId === asset.id || (block.assetIds || []).includes(asset.id))) continue;
         asset.dataUrl = await uploadWechatArticleImage(asset, token);
@@ -271,7 +282,7 @@ async function publishFromState({ allowRemote = false } = {}) {
     await writeFile(htmlPath, html, 'utf8');
     await writeFile(payloadPath, JSON.stringify({ articles: [payload] }, null, 2), 'utf8');
     const joiner = endpoint.includes('?') ? '&' : '?';
-    const response = await fetch(`${endpoint}${joiner}access_token=${encodeURIComponent(token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ articles: [payload] }) });
+    const response = await fetchWechat(`${endpoint}${joiner}access_token=${encodeURIComponent(token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ articles: [payload] }) }, '提交微信草稿');
     const responseText = await response.text();
     let parsedResponse = null; try { parsedResponse = JSON.parse(responseText); } catch {}
     const apiFailed = !response.ok || (parsedResponse && Number(parsedResponse.errcode || 0) !== 0);

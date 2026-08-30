@@ -1,4 +1,4 @@
-import { autoComposeDocument, createCreativeAsset, summarizeArticle } from './visuals.js';
+import { autoComposeDocument, createCreativeAsset, generateViralTitlePlan, planVisualLayout, summarizeArticle } from './visuals.js';
 import { WECHAT_LIMITS, inspectWechatArticle, charCount, truncateByChars } from './wechat-limits.js';
 import { applyArticleEmphasis, sanitizeImportedDocument } from './document-import.js';
 
@@ -320,6 +320,118 @@ export function getLayoutGuidance(doc) {
   for (const hint of (doc.meta?.visualPlan?.suggestions || []).slice(0, 3)) suggestions.push({ level: 'review', text: hint, command: '智能配图' });
   if (!suggestions.length) suggestions.push({ level: 'ok', text: '当前结构适合继续人工微调。', command: '' });
   return suggestions;
+}
+
+function guidanceBlockText(block = {}) {
+  return String(block.text || (Array.isArray(block.items) ? block.items.join('；') : '') || '').replace(/\s+/g, ' ').trim();
+}
+
+function guidanceHeadingText(block = {}) {
+  const text = guidanceBlockText(block);
+  const sentence = text.split(/[。！？!?；;，,]/).map(item => item.trim()).find(item => item.length >= 4) || text;
+  return truncateByChars(sentence, 18) || '章节标题';
+}
+
+function guidanceAssetText(asset = {}) {
+  return String(asset.alt || asset.caption || asset.description || asset.name || '图片').replace(/\.[^.]+$/, '').trim();
+}
+
+/**
+ * Produces a grouped, actionable report for the GUI's one-click guidance view.
+ * It only reads the document and never applies an edit, so every suggestion
+ * remains reviewable and can be sent through the existing command input.
+ */
+export function generateLayoutGuidance(doc = {}) {
+  const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
+  const paragraphs = blocks.filter(block => block.type === 'paragraph' && guidanceBlockText(block));
+  const headings = blocks.filter(block => block.type === 'heading' && guidanceBlockText(block));
+  const source = blocks.filter(block => block.type !== 'image').map(guidanceBlockText).filter(Boolean).join('\n');
+  const storedPlan = doc.meta?.visualPlan;
+  const fallbackPlan = planVisualLayout(doc, { includeCover: false, autoImageCount: true, maxGenerated: 0 });
+  const imagePlan = storedPlan?.placements?.length ? storedPlan : fallbackPlan;
+  const titlePlan = doc.meta?.titlePlan?.candidates?.length
+    ? doc.meta.titlePlan
+    : generateViralTitlePlan({ text: source, filename: doc.meta?.importedFrom || '', currentTitle: doc.title || '', keywords: imagePlan?.keywords || [], limit: 5 });
+
+  const hierarchy = [];
+  if (!blocks.length) {
+    hierarchy.push({ level: 'error', text: '还没有文章内容，暂时无法生成章节层级。', command: '' });
+  } else if (!headings.length && paragraphs.length >= 3) {
+    const targets = paragraphs.slice(0, 3);
+    for (const block of targets) {
+      const index = blocks.indexOf(block) + 1;
+      const label = guidanceHeadingText(block);
+      hierarchy.push({ level: 'review', text: `建议将第 ${index} 个区块提炼为章节标题：“${label}”。`, command: `第 ${index} 个区块改成标题：${label}` });
+    }
+  } else if (!headings.length) {
+    hierarchy.push({ level: 'review', text: '正文段落较少，建议至少补充一个小标题，形成阅读层次。', command: '添加标题：章节标题' });
+  } else {
+    hierarchy.push({ level: 'ok', text: `已识别 ${headings.length} 个章节标题，可继续检查标题之间的层级和长短。`, command: '' });
+    const deepHeadings = headings.filter(block => Number(block.level || 2) > 3);
+    if (deepHeadings.length) hierarchy.push({ level: 'review', text: `发现 ${deepHeadings.length} 个较深层级标题，建议合并或改为二级标题以适配手机阅读。`, command: '把当前改成标题' });
+  }
+
+  const imageBlocks = blocks.filter(block => block.type === 'image' && block.assetId);
+  const currentCover = imageBlocks.find(block => block.visualRole === 'cover');
+  const currentBodyImages = imageBlocks.filter(block => block !== currentCover).length;
+  const imageBudget = storedPlan?.imageBudget || fallbackPlan?.imageBudget;
+  const placements = (imagePlan?.placements || [])
+    .filter(item => item.role === 'section' || item.role === 'library-auto')
+    .slice(0, 6);
+  const images = [];
+  for (const placement of placements) {
+    const anchor = blocks.find(block => block.id === placement.anchorId);
+    const anchorIndex = anchor ? blocks.indexOf(anchor) + 1 : null;
+    const asset = placement.assetId ? (doc.assets || []).find(item => item.id === placement.assetId) : null;
+    const labels = asset?.recognition?.labels || placement.contentLabels || [];
+    const content = asset
+      ? `图片内容：${guidanceAssetText(asset)}${labels.length ? `（识别：${labels.slice(0, 2).join('、')}）` : ''}`
+      : `图片内容建议：${guidanceHeadingText(anchor || { text: placement.brief || '当前章节' })}`;
+    images.push({
+      level: asset || placement.brief ? 'review' : 'warning',
+      text: `${anchorIndex ? `第 ${anchorIndex} 个区块后` : '正文相应章节'}放置图片；${content}。`,
+      command: '图片智能导入'
+    });
+  }
+  if (!images.length && imageBudget?.bodyImages > currentBodyImages) {
+    images.push({ level: 'review', text: `按文章篇幅和章节密度，建议正文安排 ${imageBudget.bodyImages} 张图片；当前已有 ${currentBodyImages} 张。`, command: '智能配图' });
+  }
+  if (!images.length && currentBodyImages) {
+    for (const block of imageBlocks.filter(item => item !== currentCover).slice(0, 6)) {
+      const asset = (doc.assets || []).find(item => item.id === block.assetId);
+      const labels = asset?.recognition?.labels || [];
+      images.push({ level: 'ok', text: `第 ${blocks.indexOf(block) + 1} 个区块已放置图片；图片内容：${guidanceAssetText(asset || { alt: block.text })}${labels.length ? `（识别：${labels.slice(0, 2).join('、')}）` : ''}。`, command: '' });
+    }
+  }
+  if (!images.length) images.push({ level: 'ok', text: currentBodyImages ? `当前已有 ${currentBodyImages} 张正文图片，暂未发现明显的图片空位。` : '当前文章不需要额外安排正文图片，可按阅读节奏人工确认。', command: '' });
+
+  const titles = (titlePlan?.candidates || []).slice(0, 5).map((candidate, index) => ({
+    level: 'review',
+    text: `候选 ${index + 1}：${candidate.title}${candidate.rationale ? `（${candidate.rationale}）` : ''}`,
+    command: `标题：${candidate.title}`
+  }));
+  if (!titles.length) titles.push({ level: 'warning', text: '文章内容不足，暂时无法生成有依据的爆款标题。', command: '' });
+
+  const consumed = [/缺少章节层级/, /建议将第 .*提炼为章节标题/, /当前有 \d+ 张图片/, /爆款标题候选/, /图片内容/];
+  const recommendations = getLayoutGuidance(doc)
+    .filter(item => !consumed.some(pattern => pattern.test(item.text)))
+    .slice(0, 6)
+    .map(item => ({ level: item.level, text: item.text, command: item.command || '' }));
+  if (!recommendations.length) recommendations.push({ level: 'ok', text: '结构、图片和发布字段没有新增硬性问题，可继续人工微调语气与节奏。', command: '' });
+
+  const sections = [
+    { key: 'hierarchy', title: '章节层级', items: hierarchy },
+    { key: 'images', title: '图片位置与内容', items: images },
+    { key: 'titles', title: '爆款标题', items: titles },
+    { key: 'recommendations', title: '综合建议', items: recommendations }
+  ];
+  return {
+    version: 1,
+    mode: 'local-deterministic',
+    generatedAt: new Date().toISOString(),
+    sections,
+    itemCount: sections.reduce((total, section) => total + section.items.length, 0)
+  };
 }
 
 function fitWechatText(value, max) {

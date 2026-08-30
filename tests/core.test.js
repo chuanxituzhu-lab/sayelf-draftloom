@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, humanizeText, renderDocumentBody, renderArticleHtml, THEMES, normalizeTheme } from '../src/core.js';
+import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, humanizeText, renderDocumentBody, renderArticleHtml, THEMES, normalizeTheme } from '../src/core.js';
 import { inspectWechatArticle } from '../src/wechat-limits.js';
 
 test('parseCommand handles title and content commands', () => {
@@ -231,6 +231,18 @@ test('layout guidance flags long text for human review', () => {
   const doc = importArticle({ text: `文章标题\n\n${'很长的正文。'.repeat(50)}` });
   const guidance = getLayoutGuidance(doc);
   assert.equal(guidance.some(item => item.text.includes('长段落')), true);
+});
+
+test('one-click layout guidance groups local recommendations and keeps commands', () => {
+  const doc = importArticle({ text: '自动排版指导测试\n\n第一段内容，介绍文章背景和问题。\n\n第二段内容，说明解决方法和执行过程。\n\n第三段内容，总结最终结论和下一步建议。' });
+  const before = JSON.stringify(doc);
+  const report = generateLayoutGuidance(doc);
+  assert.deepEqual(report.sections.map(section => section.key), ['hierarchy', 'images', 'titles', 'recommendations']);
+  assert.ok(report.sections.find(section => section.key === 'hierarchy').items.some(item => item.command.includes('改成标题')));
+  assert.ok(report.sections.find(section => section.key === 'images').items.length >= 1);
+  assert.equal(report.sections.find(section => section.key === 'titles').items.length, 5);
+  assert.ok(report.sections.find(section => section.key === 'titles').items.every(item => item.command.startsWith('标题：')));
+  assert.equal(JSON.stringify(doc), before);
 });
 
 test('natural language supports component creation and conversion', () => {

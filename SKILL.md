@@ -82,4 +82,5 @@ npm start   # 浏览器打开 http://127.0.0.1:4173
 - 缩放等视图状态不得写入 Document State。
 - 最多 50 个编辑版本，支持 Undo/Redo。
 - `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})` 会按正文篇幅与章节密度自动计算正文配图预算，再将本地素材或创意图放到分布均匀的章节位置；`fillUnmatched:true` 也遵守预算，不会把素材库图片无上限追加到文章。
-- `publish` 默认只生成本地交付包，不上传。仅当显式配置 `WECHAT_ACCESS_TOKEN`（或 `WECHAT_APP_ID` + `WECHAT_APP_SECRET`）后才提交远程草稿；Token 不写入文档或输出。扫码授权需要真实的授权适配器；配置 `WECHAT_QR_AUTH_URL` 后二维码由本机自动生成，配置 `WECHAT_QR_IMAGE_URL` 时直接显示已有二维码，本机回调只接收适配器提交的凭据，微信官方草稿接口本身不提供扫码登录。
+- “自动排版指导”支持“一键生成”：一次完成标题/配图编排，并在本机按章节层级、图片位置/内容、爆款标题和综合建议分组生成指导；每条结果保留“带入指令”作人工微调，不会未经确认直接改写正文。
+- `publish` 默认只生成本地交付包，不上传。仅当显式配置 `WECHAT_ACCESS_TOKEN`（或 `WECHAT_APP_ID` + `WECHAT_APP_SECRET`）后才提交远程草稿；提交微信前，本机会把文章使用的 SVG 图片转换为 PNG 上传，编辑器中的原始 SVG 不变；Token 不写入文档或输出。扫码授权需要真实的授权适配器；配置 `WECHAT_QR_AUTH_URL` 后二维码由本机自动生成，配置 `WECHAT_QR_IMAGE_URL` 时直接显示已有二维码，本机回调只接收适配器提交的凭据，微信官方草稿接口本身不提供扫码登录。

@@ -17,11 +17,12 @@
     "mcp": "node scripts/mcp.mjs",
     "version:sync": "node scripts/sync-version.mjs",
     "test": "node --test",
-    "check": "node --check src/app.js && node --check src/core.js && node --check src/cover.js && node --check src/growth.js && node --check src/visuals.js && node --check src/qr-auth.js && node --check src/document-import.js && node --check src/article-history.js && node --check src/wechat-limits.js && node --check src/version.js && node --check scripts/document-extract.mjs && node --check scripts/local-config.mjs && node --check scripts/sync-version.mjs && node --check scripts/cli.mjs && node --check scripts/mcp.mjs && node --check server.mjs"
+    "check": "node --check src/app.js && node --check src/core.js && node --check src/cover.js && node --check src/growth.js && node --check src/visuals.js && node --check src/qr-auth.js && node --check src/document-import.js && node --check src/article-history.js && node --check src/wechat-limits.js && node --check src/version.js && node --check scripts/document-extract.mjs && node --check scripts/local-config.mjs && node --check scripts/wechat-media.mjs && node --check scripts/sync-version.mjs && node --check scripts/cli.mjs && node --check scripts/mcp.mjs && node --check server.mjs"
   },
   "dependencies": {
     "mammoth": "1.12.2",
     "pdf-parse": "2.4.5",
-    "qrcode": "1.5.4"
+    "qrcode": "1.5.4",
+    "sharp": "0.35.4"
   }
 }
