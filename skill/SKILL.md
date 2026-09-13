@@ -3,7 +3,7 @@ name: wechat-layout
 description: Run a local-first Chinese WeChat Official Account publishing workflow with DOCX/PDF text extraction, special-marker cleanup, optional humanization, content distillation, deterministic layout, reference-derived visual systems, WeChat review, explicit draft submission, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、内容提炼、去 AI 味、发布审核、图片插入、视觉主题或本地预览。
 ---
 
-# 公众号排版 Skill — v0.4.0
+# 公众号排版 Skill — v0.4.1
 
 ## Purpose
 
@@ -46,7 +46,7 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 - `replaceSelectedImage(assetId)`：用素材库图片替换当前选中的图片区块。
 - `deleteImage(assetId)`：从素材库删除素材，并同步移除文章/画廊中的对应图片引用；支持 undo/redo。
 - `importArticle({text,filename,assets})`：导入已提取的文章文字与本地图片，自动清理 `*`、`#`、反引号等展示标记、总结正文、生成爆款标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。GUI 的 DOCX/PDF 识别通过本机 `/api/extract-document` 完成，原始稿件保留用于回滚。
-- `publishingWorkflow()`：在当前文档上运行识别、可选自然化、核心提炼、自动排版和公众号审核本地阶段，并显示提交是否已准备好；不自动联网。
+- `publishingWorkflow()`：在当前文档上运行识别、可选自然化、核心提炼、自动排版和公众号审核本地阶段，并显示提交是否已准备好；WebUI 的“一键执行1-4”绑定到同一函数，不自动联网。
 - `humanizePreview(mode)` / `humanizeApply()` / `humanizeSkip()`：生成去 AI 味正文预览，人工确认应用或保留原文跳过；应用后自动要求重新提炼、排版和审核。
 - GUI 提供“清空重传”和“文章记录”：换稿前自动保存当前稿件，最近 12 篇文章结构保存在浏览器本机；记录可重新打开或删除，图片引用复用本地素材库。
 - 导入或编辑时，普通段落保持原样；重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号只在对应文字范围内加粗或加浅色标记，状态可随文章版本一起回滚。

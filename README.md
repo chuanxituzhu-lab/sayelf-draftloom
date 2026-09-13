@@ -1,4 +1,4 @@
-# Draftloom 公众号自动排版 v0.4.0
+# Draftloom 公众号自动排版 v0.4.1
 
 把 Markdown、TXT、DOCX、PDF 文章导入后，按**识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交**工作流处理：完成本地识别、清理特殊符号、正文自然化、提炼核心、智能排版、生成封面、手机预览，最后导出微信 HTML 或提交到公众号草稿箱。新增“微信官方深色”可选视觉系统：深色底、绿色结构锚点、局部重点和居中留边图片。
 
@@ -44,11 +44,11 @@ $env:PORT="4177"; npm start
 
 ## 最新版本下载
 
-当前最新版本：**v0.4.0**
+当前最新版本：**v0.4.1**
 
 - [打开 GitHub 仓库](https://github.com/chuanxituzhu-lab/sayelf-draftloom)
-- [下载 v0.4.0 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.0.zip)
-- [查看 v0.4.0 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.0/skill/SKILL.md)
+- [下载 v0.4.1 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.1.zip)
+- [查看 v0.4.1 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.1/skill/SKILL.md)
 
 源码 ZIP 已包含最新 Skill、WebUI、命令行工具和本地工作流；本地独立导出包仍保存在 `.local-data/exports/`，不上传到公开仓库。
 
@@ -183,7 +183,7 @@ npm start
 
 - 新增五阶段发布工作流：识别文字、提炼内容、自动排版、公众号审核、提交草稿箱。
 - 每个阶段独立记录状态、结果和待处理问题；重跑上游阶段会使下游证据自动失效，避免误用旧审核结果。
-- 新增 CLI `workflow`、MCP `publishing_workflow` 和 WebUI“一键执行工作流”。
+- 新增 CLI `workflow`、MCP `publishing_workflow` 和 WebUI“一键执行1-4”。
 - 默认只在本机完成前四阶段并准备草稿；只有显式确认且本机配置授权后，才调用微信草稿接口。
 
 ## v0.3.0 更新内容
@@ -198,6 +198,11 @@ npm start
 - 根据本地参考的公众号视觉规律新增“微信官方深色”主题：深色底、绿色结构锚点、低对比正文和局部重点。
 - 自动排版时，官方深色主题的正文图片自动居中并保留 92% 最大宽度与轻边框，封面继续遵守 900×383。
 - 新增 `docs/visual-system.md`，记录观察、推断、可验证事实和不复制参考资料的边界。
+
+## v0.4.1 更新内容
+
+- 修复顶部工具栏与工作流面板复用按钮 ID 导致面板“一键执行1-4”点击无效的问题。
+- 顶部与面板按钮现在都只执行本地识别、提炼、排版和审核，不会自动提交公众号草稿箱。
 
 ## 许可证
 

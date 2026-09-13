@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   distillArticleStage,
   getWorkflowState,
@@ -125,4 +126,12 @@ test('default workflow skips optional humanize without changing the five core st
   assert.equal(workflow.stages.humanize.report.applied, false);
   assert.equal(workflow.stages.distill.status, 'complete');
   assert.equal(workflow.stages.review.report.readyForSubmit, true);
+});
+
+test('WebUI binds both one-click 1-4 buttons without duplicate IDs', async () => {
+  const appSource = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+  assert.equal((appSource.match(/id="workflowRunBtn"/g) || []).length, 1);
+  assert.equal((appSource.match(/id="workflowRunTopBtn"/g) || []).length, 1);
+  assert.match(appSource, /querySelectorAll\('#workflowRunBtn, #workflowRunTopBtn'\)/);
+  assert.match(appSource, /button\.onclick = runLocalPublishingWorkflow/);
 });

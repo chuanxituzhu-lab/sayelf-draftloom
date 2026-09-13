@@ -409,7 +409,7 @@ function renderWorkflowPanel() {
   const detail = humanize.status === 'needs-review'
     ? '自然化预览等待人工确认；确认后才会继续提炼、排版和审核'
     : review?.readyForSubmit ? (review.warnings?.length ? `审核通过，另有 ${review.warnings.length} 项建议人工确认` : '审核通过，可以提交草稿箱') : review?.errors?.[0]?.message || '导入文章后执行一次全流程';
-  return `<section class="workflow-panel"><div class="workflow-head"><div><h3>公众号发布工作流</h3><span>识别 → 自然化（可选）→ 提炼 → 排版 → 审核 → 提交</span></div><button id="workflowRunBtn" class="primary-button" type="button" title="一次完成识别结果确认、内容提炼、自动排版和公众号审核">一键执行 1–4</button></div><div class="workflow-steps">${stepMarkup}</div><p class="workflow-detail">${esc(detail)}</p><small class="workflow-note">自然化属于可选正文修改，必须先预览并确认；上游重跑会让下游重新确认。提交仍需人工确认。</small></section>`;
+  return `<section class="workflow-panel"><div class="workflow-head"><div><h3>公众号发布工作流</h3><span>识别 → 自然化（可选）→ 提炼 → 排版 → 审核 → 提交</span></div><button id="workflowRunBtn" class="primary-button" type="button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button></div><div class="workflow-steps">${stepMarkup}</div><p class="workflow-detail">${esc(detail)}</p><small class="workflow-note">自然化属于可选正文修改，必须先预览并确认；上游重跑会让下游重新确认。提交仍需人工确认。</small></section>`;
 }
 
 function refreshWorkflowPanel() {
@@ -536,7 +536,7 @@ function render() {
     <header class="topbar">
       <div><strong>公众号排版</strong><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
-        <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="按文章篇幅与章节密度控制数量，识别图片内容并匹配正文章节">图片智能导入</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunBtn" class="workflow-run-top-button" title="一次完成识别结果确认、内容提炼、自动排版和公众号审核">一键执行工作流</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
+        <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="按文章篇幅与章节密度控制数量，识别图片内容并匹配正文章节">图片智能导入</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
       </div>
     </header>
@@ -952,8 +952,9 @@ function bindEvents() {
   });
   const run = ()=>{ const input=document.querySelector('#commandInput'); const text=input.value; if(commit(parseCommand(text),`指令：${text.slice(0,24)}`)) input.value=''; };
   document.querySelector('#runCommand').onclick=run;  document.querySelector('#commandInput').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();run();}};
-  const workflowRunButton = document.querySelector('#workflowRunBtn');
-  if (workflowRunButton) workflowRunButton.onclick = runLocalPublishingWorkflow;
+  document.querySelectorAll('#workflowRunBtn, #workflowRunTopBtn').forEach(button => {
+    button.onclick = runLocalPublishingWorkflow;
+  });
   document.querySelector('#titleInput').onchange=e=>commit({type:'setTitle',text:e.target.value.trim()},'修改标题');
   document.querySelector('#authorInput').onchange=e=>commit({type:'setAuthor',text:e.target.value.trim()},'修改作者');
   document.querySelector('#subtitleInput').onchange=e=>commit({type:'setSubtitle',text:e.target.value.trim()},'修改副标题');
