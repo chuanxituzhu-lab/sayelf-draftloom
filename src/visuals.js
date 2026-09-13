@@ -566,7 +566,7 @@ export function renderCreativeSvg({ title = '', subtitle = '', keywords = [], th
   const main = escapeXml(truncate(title || '一段值得分享的真实体验', role === 'cover' ? WECHAT_LIMITS.titleImage.mainChars : 22));
   const sub = escapeXml(truncate(subtitle || keywords.slice(0, 3).join(' · '), role === 'cover' ? WECHAT_LIMITS.titleImage.subChars : 30));
   const chips = keywords.slice(0, 3).map((keyword, chipIndex) => `<text x="${56 + chipIndex * 142}" y="326" font-size="16" fill="${palette.ink}" opacity=".72">${escapeXml(truncate(keyword, 8))}</text>`).join('');
-  const badge = role === 'cover' ? 'DRAFTLOOM · TITLE VISUAL' : `SECTION ${String(index + 1).padStart(2, '0')}`;
+  const badge = role === 'cover' ? 'DRAFTLOOM · TITLE VISUAL' : role === 'theme' ? `THEME ${String(index + 1).padStart(2, '0')}` : `SECTION ${String(index + 1).padStart(2, '0')}`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${role === 'cover' ? 383 : 506}" viewBox="0 0 900 ${role === 'cover' ? 383 : 506}">
   <defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="${palette.bg}"/><stop offset="1" stop-color="${palette.soft}"/></linearGradient></defs>
   <rect width="900" height="100%" fill="url(#g)"/><circle cx="760" cy="108" r="148" fill="${palette.accent}" opacity=".16"/><circle cx="814" cy="168" r="88" fill="${palette.accent}" opacity=".12"/><path d="M0 402 C180 332 276 468 448 388 S720 330 900 422 V506 H0Z" fill="${palette.accent}" opacity=".12"/>
@@ -582,20 +582,20 @@ export function createCreativeAsset({ title, subtitle, keywords = [], theme = 'm
   const dataUrl = svgDataUrl(svg);
   return {
     id: id || randomId(),
-    name: role === 'cover' ? 'draftloom-title-cover.svg' : `draftloom-section-${index + 1}.svg`,
+    name: role === 'cover' ? 'draftloom-title-cover.svg' : role === 'theme' ? `draftloom-theme-${index + 1}.svg` : `draftloom-section-${index + 1}.svg`,
     type: 'image/svg+xml',
     size: dataUrl.length,
     width: 900,
     height: role === 'cover' ? 383 : 506,
     dataUrl,
-    alt: role === 'cover' ? `${safeTitle} 标题封面` : `${safeTitle} 场景图`,
+    alt: role === 'cover' ? `${safeTitle} 标题封面` : role === 'theme' ? `${safeTitle} 主题图` : `${safeTitle} 场景图`,
     ...(role === 'cover' ? { coverMain: truncate(safeTitle, WECHAT_LIMITS.titleImage.mainChars), coverSub: truncate(subtitle || keywords.slice(0, 3).join(' · '), WECHAT_LIMITS.titleImage.subChars) } : {}),
     source: 'draftloom:creative-local',
     generated: true,
     theme,
     visualRole: role,
     visualAnchor: anchorId,
-    prompt: `根据文章主题“${safeTitle}”生成${role === 'cover' ? '标题封面' : '章节场景'}；关键词：${keywords.join('、')}`,
+    prompt: `根据文章${role === 'cover' ? '主题' : role === 'theme' ? '核心内容' : '章节主题'}“${safeTitle}”生成${role === 'cover' ? '标题封面' : role === 'theme' ? '主题图' : '章节场景'}；关键词：${keywords.join('、')}`,
     createdAt: new Date().toISOString()
   };
 }
@@ -608,7 +608,7 @@ function insertAfterAnchor(blocks, anchorId, block) {
 }
 
 /** Applies the plan and returns a new document, suitable for a reducer intent. */
-export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false, useCoreForCover = false, forceCoreSummary = false, autoImageCount = false, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages } = {}) {
+export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false, useCoreForCover = false, forceCoreSummary = false, autoImageCount = false, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages, coreThemeCount = 0 } = {}) {
   const next = clone(input);
   const source = articleSource(next);
   const coreContent = extractCoreContent({ text: source, title: next.title, max: 96, maxPoints: 3 });
@@ -632,11 +632,12 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
     if (analysis) asset.recognition = analysis;
   }
   const generatedAssetIds = [];
-  const findGenerated = (role, anchorId = null) => next.assets.find(asset => asset.generated && asset.source === 'draftloom:creative-local' && asset.visualRole === role && (asset.visualAnchor || null) === (anchorId || null));
-  const addOrUpdateGenerated = ({ role, anchorId = null, index = 0, brief = '', subtitle = '' }) => {
+  const findGenerated = (role, anchorId = null, purpose = null, themeIndex = null) => next.assets.find(asset => asset.generated && asset.source === 'draftloom:creative-local' && asset.visualRole === role && (asset.visualAnchor || null) === (anchorId || null) && (!purpose || asset.visualPurpose === purpose) && (themeIndex === null || asset.themeIndex === themeIndex));
+  const addOrUpdateGenerated = ({ role, anchorId = null, index = 0, brief = '', subtitle = '', purpose = null, coreSummary = '', themeIndex = null }) => {
     const keywords = extractKeywords(`${next.title}\n${brief}\n${source}`, 6);
-    const existing = findGenerated(role, anchorId);
-    const asset = createCreativeAsset({ id: existing?.id, title: role === 'cover' ? next.title : (brief || next.title), subtitle: role === 'cover' ? (subtitle || next.subtitle) : '文章语义场景图', keywords, theme: next.theme, role, index, anchorId });
+    const existing = findGenerated(role, anchorId, purpose, themeIndex);
+    const asset = createCreativeAsset({ id: existing?.id, title: role === 'cover' ? next.title : (brief || next.title), subtitle: role === 'cover' ? (subtitle || next.subtitle) : (subtitle || (role === 'theme' ? '根据文章核心内容生成' : '文章语义场景图')), keywords, theme: next.theme, role, index, anchorId });
+    if (purpose) Object.assign(asset, { visualPurpose: purpose, coreSummary: clean(coreSummary), themeIndex });
     const position = next.assets.findIndex(item => item.id === asset.id);
     if (position >= 0) next.assets[position] = asset;
     else next.assets.push(asset);
@@ -654,6 +655,50 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
       next.blocks.unshift(coverBlock);
     } else {
       next.blocks.unshift({ id: randomId(), type: 'image', assetId: coverAssetId, text: next.assets.find(asset => asset.id === coverAssetId)?.alt || `${next.title} 封面`, visualRole: 'cover', generatedBy: next.assets.find(asset => asset.id === coverAssetId)?.generated ? 'autoComposeVisuals' : undefined });
+    }
+  }
+
+  const coreThemeImageIds = [];
+  const requestedCoreThemeCount = Math.min(4, Math.max(0, Number(coreThemeCount) || 0));
+  if (requestedCoreThemeCount && generate) {
+    const themeAnchors = anchorCandidates(next, { max: requestedCoreThemeCount });
+    const themePoints = coreContent.points?.length ? coreContent.points : [coreContent.summary];
+    for (let index = 0; index < requestedCoreThemeCount; index += 1) {
+      const anchor = themeAnchors[index] || themeAnchors[themeAnchors.length - 1];
+      const brief = themePoints[index] || textOfBlock(anchor || {}) || coreContent.summary || next.title;
+      const asset = addOrUpdateGenerated({
+        role: 'theme',
+        purpose: 'core-theme',
+        anchorId: anchor?.id || null,
+        index,
+        brief,
+        subtitle: '根据文章核心内容生成',
+        coreSummary: coreContent.summary,
+        themeIndex: index
+      });
+      coreThemeImageIds.push(asset.id);
+      if (!anchor?.id) continue;
+      const alreadyPlaced = next.blocks.some(block => block.type === 'image' && block.assetId === asset.id);
+      if (alreadyPlaced) continue;
+      insertAfterAnchor(next.blocks, anchor.id, {
+        id: randomId(),
+        type: 'image',
+        assetId: asset.id,
+        text: asset.alt || `${brief} 主题图`,
+        visualRole: 'theme',
+        visualPurpose: 'core-theme',
+        visualAnchor: anchor.id,
+        visualMatch: {
+          confidence: 0.82,
+          matchedKeywords: extractKeywords(brief, 4),
+          matchedLabels: [],
+          contentLabels: ['核心主题'],
+          recognitionSource: 'core-content',
+          matchMethod: 'core-content-anchor',
+          reason: '文章核心内容主题图'
+        },
+        generatedBy: 'coreThemeImages'
+      });
     }
   }
 
@@ -747,6 +792,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
       recognition: plan.recognition,
       coverAssetId,
       generatedAssetIds: [...new Set(generatedAssetIds)],
+      coreThemeImageIds,
       placements: plan.sectionPlacements,
       hashtags: plan.hashtags || generateArticleKeywords({ title: next.title, text: source, existingKeywords: plan.keywords, max: 8 }).hashtags,
       suggestions: plan.suggestions.filter(item => !(coverAssetId && item.includes('标题封面图'))),

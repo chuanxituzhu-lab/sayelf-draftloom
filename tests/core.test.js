@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, humanizeText, renderDocumentBody, renderArticleHtml, THEMES, normalizeTheme } from '../src/core.js';
+import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, humanizeText, renderDocumentBody, renderArticleHtml, THEMES, normalizeTheme, autoFormatDocument, getWechatLayoutProfile } from '../src/core.js';
 import { inspectWechatArticle } from '../src/wechat-limits.js';
 
 test('parseCommand handles title and content commands', () => {
   assert.deepEqual(parseCommand('标题：新的标题'), { type:'setTitle', text:'新的标题' });
   assert.deepEqual(parseCommand('智能自动化优化修改执行微信公众号发布约束'), { type:'optimizeWechat' });
   assert.deepEqual(parseCommand('添加段落：正文'), { type:'appendBlock', blockType:'paragraph', text:'正文' });
+  assert.deepEqual(parseCommand('一键优化排版'), { type:'autoFormat' });
   assert.deepEqual(parseCommand('上移当前'), { type:'moveSelected', direction:-1 });
 });
 
@@ -267,13 +268,76 @@ test('natural language supports component creation and conversion', () => {
   assert.deepEqual(parseCommand('去 AI 味：保守'), { type: 'humanize', mode: 'conservative' });
 });
 
-test('theme catalog contains five distinct workspace themes', () => {
-  assert.deepEqual(Object.keys(THEMES), ['minimal', 'editorial', 'fresh', 'ink', 'sunset']);
+test('theme catalog contains six distinct workspace themes', () => {
+  assert.deepEqual(Object.keys(THEMES), ['minimal', 'editorial', 'fresh', 'ink', 'sunset', 'official']);
   assert.equal(normalizeTheme('暖阳'), 'sunset');
   const minimal = renderArticleHtml({ ...createInitialDocument(), theme: 'minimal' });
   const sunset = renderArticleHtml({ ...createInitialDocument(), theme: 'sunset' });
   assert.notEqual(minimal, sunset);
   assert.match(sunset, /#e45f3f/);
+});
+
+test('微信官方深色主题复用官方参考中的深底、绿色锚点和图片留边规则', () => {
+  const doc = {
+    ...createInitialDocument(),
+    theme: 'official',
+    title: '统一视觉系统',
+    subtitle: '让重点自然浮现',
+    blocks: [
+      { id: 'section', type: 'heading', level: 2, text: '01 先建立阅读层级' },
+      { id: 'body', type: 'paragraph', text: '正文只保留必要的阅读信息。', emphasisRanges: [{ start: 0, end: 4, style: 'mark' }] },
+      { id: 'image', type: 'image', assetId: 'visual', text: '章节配图', visualRole: 'section' }
+    ],
+    assets: [
+      { id: 'cover', name: 'cover.jpg', type: 'image/jpeg', size: 1, width: 900, height: 383, dataUrl: 'data:image/jpeg;base64,AA==', alt: '封面' },
+      { id: 'visual', name: 'visual.jpg', type: 'image/jpeg', size: 1, width: 900, height: 506, dataUrl: 'data:image/jpeg;base64,AA==', alt: '章节配图' }
+    ]
+  };
+  doc.blocks.unshift({ id: 'cover-block', type: 'image', assetId: 'cover', text: '封面', visualRole: 'cover' });
+  const profile = getWechatLayoutProfile(doc);
+  const html = renderArticleHtml(doc);
+  assert.equal(normalizeTheme('微信官方深色'), 'official');
+  assert.equal(profile.imageMaxWidth, 92);
+  assert.equal(profile.titleAlign, 'left');
+  assert.match(html, /background:#121413/);
+  assert.match(html, /text-align:left/);
+  assert.match(html, /max-width:92%;height:auto/);
+  assert.match(html, /rgba\(25,216,117,.16\)/);
+  assert.match(html, /border-bottom:1px solid #19d875/);
+
+  const previouslyFormatted = autoFormatDocument({ ...doc, theme: 'minimal' }).doc;
+  const switched = autoFormatDocument({ ...previouslyFormatted, theme: 'official' }).doc;
+  assert.equal(switched.meta.layoutProfile.themeId, 'official');
+  assert.equal(switched.meta.layoutProfile.imageMaxWidth, 92);
+  assert.equal(switched.meta.layoutProfile.titleAlign, 'left');
+});
+
+test('一键优化公众号排版会统一字体节奏并保留局部重点标注', () => {
+  const doc = {
+    ...createInitialDocument(),
+    title: '排版优化测试',
+    blocks: [
+      { id: 'label', type: 'paragraph', text: '一、先建立阅读层级' },
+      { id: 'body', type: 'paragraph', text: '  重点：这是需要读者记住的核心结论。  这是一段较长的正文，用来验证自动排版会依据句子边界拆分段落并保持手机端的阅读节奏。  第二个句子继续补充背景，避免一整屏都是密集文字。  文章还需要给出执行方法、判断标准和复盘路径，让读者读完之后知道下一步应该如何行动。  最后还要给出复盘方法，让内容从观点落到行动，并且让读者能在下一次阅读时快速找到重点。' },
+      { id: 'quote', type: 'quote', text: '“好的排版应该让重点自然浮现，而不是把所有内容都涂成重点。”' }
+    ]
+  };
+  const result = reduceDocument(doc, { type: 'autoFormat' });
+  assert.equal(result.changed, true);
+  assert.ok(result.doc.blocks.some(block => block.type === 'heading' && block.text.includes('先建立')));
+  assert.ok(result.doc.blocks.filter(block => block.type === 'paragraph').length >= 2);
+  assert.equal(result.doc.meta.layoutMode, 'auto');
+  assert.deepEqual(getWechatLayoutProfile(result.doc), result.doc.meta.layoutProfile);
+  const emphasized = result.doc.blocks.find(block => block.id === 'body');
+  assert.ok(emphasized.emphasisRanges.some(range => range.style === 'mark'));
+  assert.ok(emphasized.emphasisRanges.every(range => range.end - range.start < emphasized.text.length));
+  const html = renderArticleHtml(result.doc);
+  assert.match(html, /font-family:/);
+  assert.match(html, /margin:18px 0/);
+  assert.match(html, /background:#fff1cf/);
+  const repeat = reduceDocument(result.doc, { type: 'autoFormat' });
+  assert.equal(repeat.changed, false);
+  assert.ok(autoFormatDocument(result.doc).stats.highlightedRanges >= 1);
 });
 test('import creates list, table and CTA semantic blocks', () => {
   const doc = importArticle({ text: '# 标题\n\n- 甲\n- 乙\n\n|列A|列B|\n|---|---|\n|值1|值2|\n\n:::cta\ntext: 继续阅读\nbutton: 打开\n:::' });
@@ -301,4 +365,30 @@ test('微信草稿 HTML uses inline styles for compatibility', () => {
   assert.equal(html.includes('<style>'), false);
   assert.equal(html.includes('style="'), true);
   assert.match(html, /class="wechat-article"/);
+});
+
+test('微信排版对图片居中自适应并避免重复长图注', () => {
+  const longDescription = '这是一段自动匹配图片时产生的长正文说明，不应在图片下方再次完整占据阅读空间。';
+  const cover = { id: 'cover', name: 'cover.jpg', type: 'image/jpeg', size: 1, width: 900, height: 383, dataUrl: 'data:image/jpeg;base64,AA==', alt: '文章封面' };
+  const asset = { id: 'scene', name: 'scene.jpg', type: 'image/jpeg', size: 1, width: 900, height: 506, dataUrl: 'data:image/jpeg;base64,AA==', alt: '奥德赛归来' };
+  const doc = {
+    ...createInitialDocument(),
+    title: '奥德赛归来',
+    blocks: [
+      { id: 'cover-block', type: 'image', assetId: 'cover', text: '文章封面', visualRole: 'cover' },
+      { id: 'intro', type: 'paragraph', text: '文章正文。' },
+      { id: 'scene-block', type: 'image', assetId: 'scene', text: longDescription, visualRole: 'section', generatedBy: 'autoComposeVisuals' }
+    ],
+    assets: [cover, asset]
+  };
+  const preview = renderDocumentBody(doc);
+  const html = renderArticleHtml(doc);
+  assert.match(preview, /class="wechat-image-figure"/);
+  assert.match(preview, /正文配图 01/);
+  assert.doesNotMatch(preview, new RegExp(longDescription));
+  assert.match(html, /data-w="900" data-h="506" data-type="jpeg"/);
+  assert.match(html, /width:100%;max-width:100%;height:auto/);
+  assert.match(html, /overflow-wrap:anywhere/);
+  assert.match(html, /font-family:/);
+  assert.match(renderArticleHtml({ ...doc, blocks: [{ id: 'subheading', type: 'heading', level: 3, text: '归来的意义' }] }), /<h3 style=/);
 });

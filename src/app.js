@@ -1,10 +1,11 @@
-import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, THEMES, normalizeTheme, renderDocumentBody, renderArticleHtml, renderInlineEmphasis } from './core.js';
+import { createInitialDocument, parseCommand, reduceDocument, VersionStore, getLayoutGuidance, generateLayoutGuidance, THEMES, normalizeTheme, getWechatLayoutVariables, renderDocumentBody, renderArticleHtml, renderInlineEmphasis } from './core.js';
 import { analyzeGrowth, getDefaultGrowthProfile, growthBrief, normalizeGrowthProfile } from './growth.js';
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, formatBytes } from './wechat-limits.js';
 import { APP_VERSION } from './version.js';
 import { applyArticleEmphasis, getArticleFileKind, isSupportedArticleFile } from './document-import.js';
 import { MAX_ARTICLE_HISTORY, removeArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from './article-history.js';
 import { evaluateHotTopicFit } from './visuals.js';
+import { getWorkflowState, humanizeArticleStage, recordWorkflowSubmission, runPublishingWorkflow, skipHumanizeArticleStage } from './workflow.js';
 
 const STORAGE_KEY = 'wechat-layout-mvp:v0.1';
 const ASSET_LIBRARY_KEY = 'wechat-layout-mvp:asset-library:v0.1';
@@ -311,6 +312,114 @@ function renderGrowthPanel() {
   return `<section class="growth-section"><div class="section-head"><h3>公众号创作画像</h3><span class="hint">PingPong Growth</span></div><div class="growth-form"><input id="growthAccount" value="${esc(growthProfile.accountName)}" placeholder="公众号名称"><input id="growthPositioning" value="${esc(growthProfile.positioning)}" placeholder="定位 / 内容方向"><input id="growthAudience" value="${esc(growthProfile.audience)}" placeholder="目标读者"><input id="growthTone" value="${esc(growthProfile.tone)}" placeholder="语气风格"><input id="growthKeywords" value="${esc(growthProfile.targetKeywords.join('、'))}" placeholder="关键词，用顿号分隔"><input id="growthCta" value="${esc(growthProfile.cta)}" placeholder="结尾互动引导"><button id="growthAnalyze" class="primary-button">分析并生成创作建议</button></div><div class="growth-result">${score}${suggestions}<button id="growthCopyBrief" ${report ? '' : 'disabled'}>复制创作简报</button></div></section>`;
 }
 
+function workflowStatusLabel(status) {
+  return {
+    idle: '待开始',
+    'in-progress': '处理中',
+    complete: '已完成',
+    passed: '已通过',
+    'needs-review': '待人工确认',
+    blocked: '有问题',
+    ready: '可提交',
+    submitted: '已提交',
+    failed: '失败',
+    stale: '需重跑',
+    skipped: '已跳过',
+    'not-run': '未执行'
+  }[status] || '待执行';
+}
+
+function renderHumanizerPanel() {
+  const workflow = getWorkflowState(doc);
+  const stage = workflow.stages.humanize;
+  const report = stage.report;
+  const diff = (report?.diff || []).slice(0, 2);
+  const diffMarkup = diff.length
+    ? `<div class="humanizer-diff">${diff.map(item => `<div><small>修改前</small><p>${esc(item.before)}</p><small>修改后</small><p>${esc(item.after)}</p></div>`).join('')}</div>`
+    : '';
+  const stateText = stage.status === 'needs-review'
+    ? `已生成 ${report.changedBlocks || 0} 个区块的自然化预览，请确认后应用`
+    : stage.status === 'complete' && report?.applied
+      ? `已应用${report.changedBlocks ? ` ${report.changedBlocks} 个区块` : ''}，后续提炼、排版和审核需要重新执行`
+      : stage.status === 'skipped'
+        ? '可选阶段：当前保留原文，未执行自然化'
+        : '先生成预览，再决定是否修改正文';
+  return `<div class="humanizer-box"><div class="command-label">去 AI 味（可选正文阶段）</div><div class="humanizer-row"><select id="humanizerMode"><option value="natural" ${doc.meta.humanizer?.mode === 'natural' ? 'selected' : ''}>自然化</option><option value="conservative" ${doc.meta.humanizer?.mode === 'conservative' ? 'selected' : ''}>保守调整</option></select><button id="humanizePreviewBtn">生成修改预览</button><button id="humanizeApplyBtn" ${stage.status === 'needs-review' ? '' : 'disabled'}>确认应用到正文</button><button id="humanizeSkipBtn" ${stage.status === 'needs-review' ? '' : 'disabled'}>保留原文继续</button></div><div class="hint">${esc(stateText)}。原稿由版本记录保留，不修改事实、数字、引用和核心观点。</div>${diffMarkup}</div>`;
+}
+
+function previewHumanization(requestedMode = '') {
+  const mode = requestedMode || document.querySelector('#humanizerMode')?.value || 'natural';
+  const result = humanizeArticleStage(doc, { mode, apply: false });
+  doc = store.commit(result.doc, '预览去 AI 味');
+  autoGuidance = null;
+  persist();
+  render();
+  setStatus(result.report.changedBlocks ? `已生成去 AI 味预览：${result.report.changedBlocks} 个区块等待确认` : '当前正文无需自然化调整');
+  return result;
+}
+
+function applyHumanization() {
+  const stage = getWorkflowState(doc).stages.humanize;
+  if (stage.status !== 'needs-review') {
+    setStatus('请先生成去 AI 味预览');
+    return null;
+  }
+  const result = humanizeArticleStage(doc, { mode: stage.report?.mode || document.querySelector('#humanizerMode')?.value || 'natural', apply: true });
+  doc = store.commit(result.doc, '确认应用去 AI 味');
+  autoGuidance = null;
+  persist();
+  render();
+  setStatus(`已应用去 AI 味修改：${result.report.changedBlocks} 个区块；请重新执行后续工作流`);
+  window.dispatchEvent(new CustomEvent('wechat-layout:changed', { detail: { doc: structuredClone(doc), workflow: result.report } }));
+  return result;
+}
+
+function skipHumanization() {
+  const stage = getWorkflowState(doc).stages.humanize;
+  if (stage.status !== 'needs-review') {
+    setStatus('当前没有待处理的自然化预览');
+    return null;
+  }
+  const result = skipHumanizeArticleStage(doc);
+  doc = store.commit(result.doc, '保留原文并跳过去 AI 味');
+  autoGuidance = null;
+  persist();
+  render();
+  setStatus('已保留原文；可以继续执行提炼、排版和审核');
+  return result;
+}
+
+function renderWorkflowPanel() {
+  const workflow = getWorkflowState(doc);
+  const steps = [
+    ['recognize', '识别', '导入时完成，保留原稿'],
+    ['humanize', '自然化', '可选，先预览再应用'],
+    ['distill', '提炼', '核心、概要、标题候选'],
+    ['layout', '排版', '字体、段落、图片与重点'],
+    ['review', '审核', '微信限制与兼容性'],
+    ['submit', '提交', '需授权并人工确认']
+  ];
+  const stepMarkup = steps.map(([key, short, hint], index) => {
+    const stage = workflow.stages[key];
+    const icon = stage.status === 'passed' || stage.status === 'complete' || stage.status === 'ready' || stage.status === 'submitted' ? '✓' : stage.status === 'blocked' ? '!' : String(index + 1);
+    return `<div class="workflow-step workflow-${stage.status}" title="${esc(stage.description || hint)}"><b>${icon}</b><span>${short}</span><small>${workflowStatusLabel(stage.status)}</small></div>`;
+  }).join('<i class="workflow-arrow">›</i>');
+  const humanize = workflow.stages.humanize;
+  const review = workflow.stages.review.report;
+  const detail = humanize.status === 'needs-review'
+    ? '自然化预览等待人工确认；确认后才会继续提炼、排版和审核'
+    : review?.readyForSubmit ? (review.warnings?.length ? `审核通过，另有 ${review.warnings.length} 项建议人工确认` : '审核通过，可以提交草稿箱') : review?.errors?.[0]?.message || '导入文章后执行一次全流程';
+  return `<section class="workflow-panel"><div class="workflow-head"><div><h3>公众号发布工作流</h3><span>识别 → 自然化（可选）→ 提炼 → 排版 → 审核 → 提交</span></div><button id="workflowRunBtn" class="primary-button" type="button" title="一次完成识别结果确认、内容提炼、自动排版和公众号审核">一键执行 1–4</button></div><div class="workflow-steps">${stepMarkup}</div><p class="workflow-detail">${esc(detail)}</p><small class="workflow-note">自然化属于可选正文修改，必须先预览并确认；上游重跑会让下游重新确认。提交仍需人工确认。</small></section>`;
+}
+
+function refreshWorkflowPanel() {
+  const panel = document.querySelector('.workflow-panel');
+  if (!panel) return;
+  panel.outerHTML = renderWorkflowPanel();
+  const button = document.querySelector('#workflowRunBtn');
+  if (button) button.onclick = runLocalPublishingWorkflow;
+}
+
 function captureViewState() {
   return ['.left-panel', '.editor-panel', '.preview-panel', '.phone-stage', '.asset-grid', '.article-history-list', '.outline-section']
     .map(selector => {
@@ -333,7 +442,7 @@ function commit(intent, label) {
   const result = reduceDocument(doc, intent, selectedId);
   if (result.error) { setStatus(result.error); return false; }
   let finalResult = result;
-  if (result.changed && intent.type !== 'optimizeWechat') {
+  if (result.changed && !['optimizeWechat', 'autoFormat'].includes(intent.type)) {
     const automatic = reduceDocument(result.doc, { type: 'optimizeWechat' }, result.selectedId);
     if (automatic.changed) finalResult = { ...result, doc: automatic.doc, selectedId: automatic.selectedId, optimization: automatic.optimization, autoOptimized: true };
   }
@@ -350,6 +459,15 @@ function commit(intent, label) {
     if (intent.fillUnmatched) statusLabel = `图片内容识别完成：按内容建议 ${budget?.bodyImages || 0} 张正文图，匹配 ${matched} 个章节${appended ? `，补充 ${appended} 张图片` : ''}`;
     else statusLabel = `智能配图完成：按内容建议 ${budget?.bodyImages || 0} 张正文图，本次安排 ${placements.length} 张`;
   }
+  if (intent.type === 'generateCoreThemeImages') {
+    const count = doc.meta?.visualPlan?.coreThemeImageIds?.length || 2;
+    statusLabel = `已根据核心内容生成 ${count} 张主题图，已保存到“我的素材”并插入正文`;
+  }
+  if (intent.type === 'autoFormat') {
+    statusLabel = finalResult.formatting?.changes?.length
+      ? finalResult.formatting.changes.join('；')
+      : '自动排版检查完成，当前版式已经合格';
+  }
   if (intent.type === 'optimizeWechat' || finalResult.autoOptimized) {
     const optimization = finalResult.optimization;
     statusLabel = optimization?.changes?.length ? optimization.changes.join('；') : '微信发布约束检查完成，无需修改';
@@ -365,6 +483,42 @@ function commit(intent, label) {
   window.dispatchEvent(new CustomEvent('wechat-layout:changed', { detail: { doc: structuredClone(doc), intent } }));
   return true;
 }
+
+function runLocalPublishingWorkflow() {
+  try {
+    const result = runPublishingWorkflow({ doc }, {
+      generateImages: true,
+      maxGenerated: 3,
+      autoImageCount: true,
+      autoFix: true,
+      applyTitleWhenMissing: true
+    });
+    selectedId = result.doc.blocks.find(block => block.id === selectedId)?.id || result.doc.blocks[0]?.id || null;
+    doc = store.commit(result.doc, '工作流：识别→自然化(可选)→提炼→排版→审核');
+    autoGuidance = null;
+    lastWechatCheck = {
+      summary: result.readyForSubmit ? '工作流审核通过' : result.haltedAt === 'humanize' ? '自然化预览等待人工确认' : `审核未通过：${result.reports.review?.errors?.[0]?.message || '请查看工作流状态'}`,
+      at: new Date().toLocaleTimeString()
+    };
+    persist();
+    render();
+    if (result.haltedAt === 'humanize') {
+      setStatus('工作流暂停：请先确认“去 AI 味”预览，再继续提炼、排版和审核');
+      window.dispatchEvent(new CustomEvent('wechat-layout:changed', { detail: { doc: structuredClone(doc), workflow: result.reports } }));
+      return result;
+    }
+    const review = result.reports.review;
+    setStatus(result.readyForSubmit
+      ? `工作流完成：已识别、提炼、排版并通过公众号审核${review.warnings?.length ? `，有 ${review.warnings.length} 项建议人工确认` : ''}；下一步提交草稿箱`
+      : `工作流已完成前 3 步，但公众号审核未通过：${review.errors?.[0]?.message || '请查看审核结果'}`);
+    window.dispatchEvent(new CustomEvent('wechat-layout:changed', { detail: { doc: structuredClone(doc), workflow: result.reports } }));
+    return result;
+  } catch (error) {
+    setStatus(`工作流执行失败：${error.message}`);
+    return null;
+  }
+}
+
 function autoOptimizeLoadedDocument(){
   const automatic=reduceDocument(doc,{type:'optimizeWechat'},selectedId);
   if(!automatic.changed)return null;
@@ -382,7 +536,7 @@ function render() {
     <header class="topbar">
       <div><strong>公众号排版</strong><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
-        <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="按文章篇幅与章节密度控制数量，识别图片内容并匹配正文章节">图片智能导入</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
+        <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="按文章篇幅与章节密度控制数量，识别图片内容并匹配正文章节">图片智能导入</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunBtn" class="workflow-run-top-button" title="一次完成识别结果确认、内容提炼、自动排版和公众号审核">一键执行工作流</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
       </div>
     </header>
@@ -396,10 +550,11 @@ function render() {
       </aside>
       <section class="panel editor-panel">
         <div id="importDrop" class="import-drop"><strong>拖入文章、DOCX、PDF 或图片，自动排版</strong><span>DOCX/PDF 在本机识别并自动清理 *、#、反引号等特殊标记；随后总结正文、生成爆款标题与标题图，导入后可继续人工调整</span></div>
+        ${renderWorkflowPanel()}
         <div class="command-box"><div class="command-label">文字指令</div><div class="command-row"><textarea id="commandInput" rows="1" placeholder="如：把当前改成引用 / 拆分当前段落 / 添加表格：列1|列2"></textarea><button id="runCommand">执行</button></div><div class="hint">支持按区块转换、拆分、主题切换和组件创建；表格可用换行或分号分隔；未识别的文字会作为新段落。</div></div>
         <div class="guidance-box"><div class="guidance-head"><div class="command-label">自动排版指导</div><button id="guidanceGenerateBtn" class="guidance-generate-button" type="button" title="根据当前文章自动生成章节、图片、标题和发布建议">一键生成</button></div><div id="guidanceList">${renderGuidance()}</div></div>
         ${renderWechatLimits()}
-        <div class="humanizer-box"><div class="command-label">去 AI 味</div><div class="humanizer-row"><select id="humanizerMode"><option value="natural" ${doc.meta.humanizer?.mode === 'natural' ? 'selected' : ''}>自然化</option><option value="conservative" ${doc.meta.humanizer?.mode === 'conservative' ? 'selected' : ''}>保守调整</option></select><button id="humanizeBtn">应用到正文</button></div><div class="hint">本地确定性处理，原稿保存在导入记录中，可随时回滚。</div></div>
+        ${renderHumanizerPanel()}
         ${renderCoverSummaryPanel()}
         <div class="title-editor"><div class="title-row"><input id="titleInput" maxlength="${WECHAT_LIMITS.titleChars}" value="${esc(doc.title)}" aria-label="标题"><button id="viralTitleBtn" type="button" title="根据正文总结并生成爆款标题">生成爆款标题</button></div><input id="authorInput" maxlength="${WECHAT_LIMITS.authorChars}" value="${esc(doc.author || '')}" aria-label="作者" placeholder="作者（可选，最多 16 字）"><div class="title-ai-panel">${renderTitlePlan()}</div></div>
         ${renderKeywordPanel()}
@@ -408,7 +563,7 @@ function render() {
       </section>
       <aside class="panel preview-panel">
         <div class="preview-toolbar"><div><b>微信文章实时预览</b><span>仅视觉缩放，不改变内容</span></div><div class="preview-controls"><label>主题<select id="themeSelect">${Object.values(THEMES).map(theme => `<option value="${theme.id}" ${normalizeTheme(doc.theme) === theme.id ? 'selected' : ''}>${theme.label}</option>`).join('')}</select></label><button id="wechatCheckBtn" class="check-button" title="检查微信字段、正文、封面和素材，并自动优化可安全修正项">一键检测</button><div class="zoom"><button id="zoomOut">−</button><span id="zoomText">${Math.round(zoom*100)}%</span><button id="zoomIn">＋</button><button id="zoomReset">1:1</button></div></div></div>
-        <div class="phone-stage"><article class="wechat-article theme-${normalizeTheme(doc.theme)}" style="transform:scale(${zoom})">${renderPreview()}</article></div>
+        <div class="phone-stage"><article class="wechat-article theme-${normalizeTheme(doc.theme)}" style="transform:scale(${zoom});${getWechatLayoutVariables(doc)}">${renderPreview()}</article></div>
       </aside>
     </main>
     <footer class="statusbar"><span id="statusText" role="status" aria-live="polite">${esc(status)}</span><span id="revisionText">v${doc.meta.revision} · ${new Date(doc.meta.updatedAt).toLocaleTimeString()}</span></footer>
@@ -797,6 +952,8 @@ function bindEvents() {
   });
   const run = ()=>{ const input=document.querySelector('#commandInput'); const text=input.value; if(commit(parseCommand(text),`指令：${text.slice(0,24)}`)) input.value=''; };
   document.querySelector('#runCommand').onclick=run;  document.querySelector('#commandInput').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();run();}};
+  const workflowRunButton = document.querySelector('#workflowRunBtn');
+  if (workflowRunButton) workflowRunButton.onclick = runLocalPublishingWorkflow;
   document.querySelector('#titleInput').onchange=e=>commit({type:'setTitle',text:e.target.value.trim()},'修改标题');
   document.querySelector('#authorInput').onchange=e=>commit({type:'setAuthor',text:e.target.value.trim()},'修改作者');
   document.querySelector('#subtitleInput').onchange=e=>commit({type:'setSubtitle',text:e.target.value.trim()},'修改副标题');
@@ -816,7 +973,12 @@ function bindEvents() {
     render();
     setStatus(hotTopicsText ? '已按输入的热点词复核关键词关联度' : '已清除热点词，恢复本地语义判断');
   };
-  document.querySelector('#humanizeBtn').onclick=()=>{const mode=document.querySelector('#humanizerMode').value;commit({type:'humanize',mode},`去 AI 味：${mode==='natural'?'自然化':'保守调整'}`);};
+  const humanizePreviewButton = document.querySelector('#humanizePreviewBtn');
+  if (humanizePreviewButton) humanizePreviewButton.onclick = previewHumanization;
+  const humanizeApplyButton = document.querySelector('#humanizeApplyBtn');
+  if (humanizeApplyButton) humanizeApplyButton.onclick = applyHumanization;
+  const humanizeSkipButton = document.querySelector('#humanizeSkipBtn');
+  if (humanizeSkipButton) humanizeSkipButton.onclick = skipHumanization;
   document.querySelector('#themeSelect').onchange=e=>commit({type:'setTheme',theme:e.target.value},'切换主题');
   document.querySelector('#undoBtn').onclick=()=>{doc=store.undo(doc);persist();render();setStatus('已回滚一步');};
   document.querySelector('#redoBtn').onclick=()=>{doc=store.redo(doc);persist();render();setStatus('已重做一步');};
@@ -824,10 +986,23 @@ function bindEvents() {
   document.querySelector('#draftBtn').onclick=openDraftDialog;
   document.querySelector('#visualComposeBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral'},'智能配图与标题');
   document.querySelector('#coverAutoBtn').onclick=()=>commit({type:'smartCover'},'封面一键设置');
+  const titleImageButton = document.querySelector('#titleImageAutoBtn');
+  if (titleImageButton && !document.querySelector('#coreThemeImagesBtn')) {
+    const button = document.createElement('button');
+    button.id = 'coreThemeImagesBtn';
+    button.type = 'button';
+    button.title = '依据核心提炼内容生成两张正文主题图';
+    button.textContent = '根据核心生成 2 张主题图';
+    titleImageButton.after(button);
+  }
+  const coreThemeButton = document.querySelector('#coreThemeImagesBtn');
+  if (coreThemeButton) coreThemeButton.onclick=()=>commit({type:'generateCoreThemeImages',count:2},'根据核心生成两张主题图');
   document.querySelector('#titleImageAutoBtn').onclick=()=>commit({type:'generateTitleImage'},'提炼核心并生成标题图');
   document.querySelector('#assetAutoFillBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:false,maxGenerated:0,autoImageCount:true,fillUnmatched:true,titleMode:'safe'},'图片智能导入');
+  document.querySelector('#layoutAutoBtn').onclick=()=>commit({type:'autoFormat'},'一键优化公众号排版');
   document.querySelector('#wechatCheckBtn').onclick=runWechatCheck;
   document.querySelector('#guidanceGenerateBtn').onclick=()=>{
+    commit({type:'autoFormat'},'自动优化公众号排版');
     commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral'},'自动排版一键生成');
     autoGuidance = generateLayoutGuidance(doc);
     render();
@@ -976,7 +1151,11 @@ async function submitDraftToWechat({skipConfirm=false}={}){
         statusEl.textContent='等待扫码授权…授权成功后将自动上传图片并创建草稿。';
         return;
       }
-      exportDraftBundle(); if(document.querySelector('#draftDialog')?.open)document.querySelector('#draftDialog').close(); return;
+      exportDraftBundle();
+      doc = recordWorkflowSubmission(doc, { status: 'ready', mode: 'local-bundle' });
+      persist();
+      refreshWorkflowPanel();
+      if(document.querySelector('#draftDialog')?.open)document.querySelector('#draftDialog').close(); return;
     }
     if(!skipConfirm && !window.confirm('确认将当前文章提交到已配置的公众号草稿箱吗？'))return;
     statusEl.textContent='正在上传图片并提交草稿…';
@@ -988,13 +1167,25 @@ async function submitDraftToWechat({skipConfirm=false}={}){
       const nextAction=esc(result.delivery?.nextAction||'请在微信公众号后台人工审核后发送');
       statusEl.className='draft-status ready success';
       statusEl.innerHTML=`<strong>✓ 提交成功</strong><span>文章已进入公众号草稿箱</span><small>${idText}<br>${nextAction}</small>`;
+      doc = recordWorkflowSubmission(doc, result.delivery);
+      persist();
+      refreshWorkflowPanel();
       setStatus(`草稿已进入公众号草稿箱${draftId?`（${draftId}）`:''}，请人工审核后发送`);
     } else {
       statusEl.className='draft-status local';
       statusEl.textContent='已生成本地草稿包。';
+      doc = recordWorkflowSubmission(doc, result.delivery || { status: 'ready', mode: 'local-bundle' });
+      persist();
+      refreshWorkflowPanel();
       setStatus('已生成本地微信草稿包');
     }
-  } catch(error) { const message=requestError(error, '提交到公众号草稿箱失败'); statusEl.className='draft-status local error'; statusEl.textContent=`提交失败：${message}`; setStatus(`草稿导出失败：${message}`); }
+  } catch(error) {
+    const message=requestError(error, '提交到公众号草稿箱失败');
+    doc = recordWorkflowSubmission(doc, { status: 'failed', mode: 'wechat-api', error: message });
+    persist();
+    refreshWorkflowPanel();
+    statusEl.className='draft-status local error'; statusEl.textContent=`提交失败：${message}`; setStatus(`草稿导出失败：${message}`);
+  }
 }async function readArticleFile(file){
   const kind=getArticleFileKind(file);
   if(kind==='text') return {text:await file.text(),kind,warnings:[]};
@@ -1013,24 +1204,32 @@ async function handleArticleImport(fileList=[], pastedText=''){
     if(!text&&!imageFiles.length) throw new Error('没有找到文章文字或图片');
     const newAssets=await Promise.all(imageFiles.map(async file=>{const prepared=await optimizeImageFile(file);return {id:crypto.randomUUID(),name:file.name,type:prepared.type,size:prepared.size,dataUrl:prepared.dataUrl,alt:file.name.replace(/\.[^.]+$/,'')};}));
     const assets=mergeAssets(loadAssetLibrary(), newAssets);
-    const incoming=importArticle({text,filename:articleFile?.name||'pasted-article.txt',assets,autoCompose:true,visualOptions:{generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral',forceTitle:true}});
+    const workflowResult=runPublishingWorkflow({text,filename:articleFile?.name||'pasted-article.txt',assets},{generateImages:true,maxGenerated:3,autoImageCount:true,autoFix:true});
+    const incoming=workflowResult.doc;
     if(extracted.warnings?.length) incoming.meta.importWarnings=[...(incoming.meta.importWarnings||[]),...extracted.warnings.map(item=>`本地 ${extracted.kind?.toUpperCase()||'文档'} 识别提示：${item}`)];
     if(replaceCurrentDocument(incoming,`自动排版导入：${articleFile?.name||`${assets.length} 张图片`}`)){
       const warnings=incoming.meta.importWarnings||[];
       const generated=incoming.meta.visualPlan?.generatedAssetIds?.length||0;
       const reused=Math.max(0,assets.length-newAssets.length);
       const sourceLabel=extracted.kind==='docx'?'DOCX':extracted.kind==='pdf'?'PDF':'文字稿';
-      setStatus(warnings.length?`已本地识别 ${sourceLabel} 并导入，${warnings.length} 条提示`:`已本地识别 ${sourceLabel}，导入完成${reused?`，复用素材 ${reused} 张`:''}${generated?`，新增创意图 ${generated} 张`:''}`);
+      setStatus(warnings.length?`已完成 ${sourceLabel} 发布工作流并导入，${warnings.length} 条提示`:`已完成 ${sourceLabel} 发布工作流${reused?`，复用素材 ${reused} 张`:''}${generated?`，新增创意图 ${generated} 张`:''}`);
     }
   } catch(err) { setStatus(`导入失败：${err.message}`); }
 }
 window.wechatLayoutHarness = {  getState: () => structuredClone(doc),
   applyIntent: (intent, label='Harness 编辑') => commit(intent, label),
   applyText: (text) => commit(parseCommand(text), `Harness：${text.slice(0,24)}`),
-  importArticle: ({text,filename='pasted-article.txt',assets=[]}) => { const incoming=importArticle({text,filename,assets:mergeAssets(loadAssetLibrary(), assets),autoCompose:true,visualOptions:{generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral',forceTitle:true}}); const changed=replaceCurrentDocument(incoming,`Harness 导入：${filename}`); return changed ? {doc:structuredClone(doc),guidance:getLayoutGuidance(doc)} : null; },
+  importArticle: ({text,filename='pasted-article.txt',assets=[]}) => { const result=runPublishingWorkflow({text,filename,assets:mergeAssets(loadAssetLibrary(), assets)},{generateImages:true,maxGenerated:3,autoImageCount:true,autoFix:true}); const changed=replaceCurrentDocument(result.doc,`Harness 导入：${filename}`); return changed ? {doc:structuredClone(doc),guidance:getLayoutGuidance(doc),workflow:getWorkflowState(doc),reports:result.reports} : null; },
   autoComposeVisuals: (options={}) => commit({type:'autoComposeVisuals',generate:options.generate !== false,maxGenerated:options.maxGenerated ?? 3,autoImageCount:options.autoImageCount !== false,titleMode:options.titleMode || 'viral',forceTitle:options.forceTitle === true,fillUnmatched:options.fillUnmatched === true}, options.fillUnmatched ? '图片智能导入' : '智能配图与标题'),
+  generateCoreThemeImages: (count=2) => commit({type:'generateCoreThemeImages',count}, '根据核心生成主题图'),
   coverSet: () => commit({type:'smartCover'}, '封面一键设置'),
   smartCover: () => commit({type:'smartCover'}, '封面一键设置'),
+  autoFormat: () => commit({type:'autoFormat'}, '一键优化公众号排版'),
+  humanizePreview: (mode='natural') => previewHumanization(mode),
+  humanizeApply: () => applyHumanization(),
+  humanizeSkip: () => skipHumanization(),
+  publishingWorkflow: () => runLocalPublishingWorkflow(),
+  getWorkflowState: () => getWorkflowState(doc),
   optimizeWechat: () => commit({type:'optimizeWechat'}, '智能优化微信发布约束'),
   checkWechat: runWechatCheck,
   getLayoutGuidance: () => getLayoutGuidance(doc),

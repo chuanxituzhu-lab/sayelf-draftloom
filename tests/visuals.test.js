@@ -7,6 +7,7 @@ test('natural language command exposes smart visual composition', () => {
   assert.deepEqual(parseCommand('智能配图'), { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, autoImageCount: true, titleMode: 'viral' });
   assert.deepEqual(parseCommand('图片自动导入'), { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, autoImageCount: true, fillUnmatched: true, titleMode: 'safe' });
   assert.deepEqual(parseCommand('图片智能导入'), { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, autoImageCount: true, fillUnmatched: true, titleMode: 'safe' });
+  assert.deepEqual(parseCommand('根据核心内容生成两张主题图片'), { type: 'generateCoreThemeImages', count: 2 });
 });
 
 test('title derivation prefers a markdown heading and keeps WeChat length safe', () => {
@@ -43,6 +44,20 @@ test('keyword extraction is deterministic and useful for semantic image matching
   const keywords = extractKeywords('山野茶 山野茶 自然生活与真实体验');
   assert.ok(keywords.includes('山野茶'));
   assert.ok(keywords.length <= 8);
+});
+
+test('core theme generation creates two local images and remains idempotent', () => {
+  const doc = importArticle({ text: '# AI 与内容创作\n\nAI 可以降低制作成本，但 Idea 决定表达方向。持续发布、获得数据反馈，才能形成自己的方法。' });
+  const first = autoComposeDocument(doc, { generate: true, includeCover: false, maxGenerated: 0, coreThemeCount: 2 });
+  const firstThemes = first.assets.filter(asset => asset.visualPurpose === 'core-theme');
+  const firstBlocks = first.blocks.filter(block => block.visualPurpose === 'core-theme');
+  assert.equal(firstThemes.length, 2);
+  assert.equal(firstBlocks.length, 2);
+  assert.equal(first.meta.visualPlan.coreThemeImageIds.length, 2);
+  assert.ok(firstThemes.every(asset => asset.name.startsWith('draftloom-theme-')));
+  const second = autoComposeDocument(first, { generate: true, includeCover: false, maxGenerated: 0, coreThemeCount: 2 });
+  assert.equal(second.assets.filter(asset => asset.visualPurpose === 'core-theme').length, 2);
+  assert.equal(second.blocks.filter(block => block.visualPurpose === 'core-theme').length, 2);
 });
 
 test('article keyword plan returns deduplicated copy-ready hashtags', () => {

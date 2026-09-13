@@ -1,13 +1,26 @@
 ---
 name: wechat-layout
-description: Edit and preview Chinese WeChat Official Account articles with local-first DOCX/PDF text extraction, special-marker cleanup, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、图片插入或本地预览。
+description: Run a local-first Chinese WeChat Official Account publishing workflow with DOCX/PDF text extraction, special-marker cleanup, optional humanization, content distillation, deterministic layout, reference-derived visual systems, WeChat review, explicit draft submission, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、内容提炼、去 AI 味、发布审核、图片插入、视觉主题或本地预览。
 ---
 
-# 公众号排版 Skill — MVP v0.1
+# 公众号排版 Skill — v0.4.0
 
 ## Purpose
 
-将自然语言编辑意图转换为公众号文章结构化编辑操作，并保持 GUI、文档状态、微信预览一致。
+将文字稿转换为微信公众号草稿的可回退工作流，并保持 GUI、文档状态、微信预览和提交结果一致。默认顺序为：识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交。
+
+## Workflow contract
+
+固定职责为：
+
+1. `recognizeArticleStage`：本地识别文字、Markdown、DOCX、PDF，清理展示标记并生成结构化区块；原稿只读保留。
+2. `humanizeArticleStage`（可选）：先生成正文差异预览；只有人工确认后才应用自然化新版本，不修改事实、数字、引用和核心观点。
+3. `distillArticleStage`：基于已接受的正文提炼核心观点、内容概要、标题候选和关键词；默认不改写正文，人工标题不会被覆盖。
+4. `layoutArticleStage`：统一字体、字号、行距、段距和标题层级，拆分过长段落，局部标注重点，并按章节密度安排图片/封面。
+5. `reviewArticleStage`：检查标题、作者、摘要、正文字符/大小、封面、图片和 HTML；只自动修安全项，错误与建议都保留在报告中。
+6. `prepareWorkflowSubmission` + 现有提交适配器：生成微信 payload；只有用户显式确认且授权可用时，才上传图片并创建草稿，绝不代替后台群发。
+
+`runPublishingWorkflow` 负责按依赖串联本地阶段并准备提交，不直接产生网络副作用。工作流状态写入 `doc.meta.workflow`：每个阶段都有 `status`、`at`、`report` 和 handoff；自然化预览会停在人工闸门，应用后自动让提炼、排版、审核和提交结果失效；阶段转换、检查点和证据写入本地 ledger，提交结果通过 `recordWorkflowSubmission` 写回。
 
 ## State rule
 
@@ -23,6 +36,7 @@ description: Edit and preview Chinese WeChat Official Account articles with loca
 ### Read
 
 - `getState()`：返回完整文档快照。
+- `getWorkflowState()`：返回阶段状态、审核结果、检查点、运行证据和是否可以提交。
 
 ### Write
 
@@ -32,6 +46,8 @@ description: Edit and preview Chinese WeChat Official Account articles with loca
 - `replaceSelectedImage(assetId)`：用素材库图片替换当前选中的图片区块。
 - `deleteImage(assetId)`：从素材库删除素材，并同步移除文章/画廊中的对应图片引用；支持 undo/redo。
 - `importArticle({text,filename,assets})`：导入已提取的文章文字与本地图片，自动清理 `*`、`#`、反引号等展示标记、总结正文、生成爆款标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。GUI 的 DOCX/PDF 识别通过本机 `/api/extract-document` 完成，原始稿件保留用于回滚。
+- `publishingWorkflow()`：在当前文档上运行识别、可选自然化、核心提炼、自动排版和公众号审核本地阶段，并显示提交是否已准备好；不自动联网。
+- `humanizePreview(mode)` / `humanizeApply()` / `humanizeSkip()`：生成去 AI 味正文预览，人工确认应用或保留原文跳过；应用后自动要求重新提炼、排版和审核。
 - GUI 提供“清空重传”和“文章记录”：换稿前自动保存当前稿件，最近 12 篇文章结构保存在浏览器本机；记录可重新打开或删除，图片引用复用本地素材库。
 - 导入或编辑时，普通段落保持原样；重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号只在对应文字范围内加粗或加浅色标记，状态可随文章版本一起回滚。
 - `generateTitleImage`：本地提炼文章核心内容，生成一张 900×383 标题图片并写入素材库，标题和摘要仍可人工修改。
@@ -80,7 +96,7 @@ description: Edit and preview Chinese WeChat Official Account articles with loca
 
 ## Natural-language examples
 
-主题目录包含五套：极简、杂志、清新、墨韵、暖阳。切换主题会同步刷新工作区容器、编辑区、工具栏和右侧预览。
+主题目录包含六套：极简、杂志、清新、墨韵、暖阳、微信官方深色。切换主题会同步刷新工作区容器、编辑区、工具栏和右侧预览；“微信官方深色”来自参考截图的视觉规律提炼，不复制其文章内容或品牌素材。完整规则见 `docs/visual-system.md`。
 
 公众号预览固定保留封面图位置和内容摘要位置：已有首图作为封面，缺图时显示待补位提示；封面文案与摘要来自文档状态，优化后会同步刷新，不直接修改原稿。
 
@@ -98,6 +114,7 @@ description: Edit and preview Chinese WeChat Official Account articles with loca
 - `添加表格：指标|结果\n阅读量|1000`
 - `主题：杂志`
 - `主题：墨韵` / `主题：暖阳`
+- `主题：微信官方深色`
 - `去 AI 味：自然`
 - `智能配图`
 - `提炼核心并生成标题图`
@@ -129,6 +146,15 @@ Harness 还提供 `getGrowthProfile()`、`setGrowthProfile(profile)`、`analyzeG
 ```bash
 npm run cli -- init
 npm run cli -- import --article article.md --images ./images
+npm run cli -- workflow --article article.md --images ./images
+npm run cli -- workflow --article article.md --humanize-mode natural
+npm run cli -- workflow --article article.md --humanize-mode natural --apply-humanize true
+npm run cli -- humanize-stage --mode natural
+npm run cli -- humanize-stage --mode natural --apply true
+npm run cli -- workflow --text "文章内容" --submit true
+npm run cli -- distill
+npm run cli -- layout-stage
+npm run cli -- review
 npm run cli -- import --text "文章内容" --image ./cover.png
 npm run cli -- guidance
 npm run cli -- cover --out .local-data/cover

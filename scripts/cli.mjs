@@ -9,6 +9,8 @@ import { draftCoverCopy, renderCoverSvg, auditCoverImage, COVER_SPEC } from '../
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, charCount } from '../src/wechat-limits.js';
 import { applyProtectedLocalConfig } from './local-config.mjs';
 import { normalizeWechatAsset, parseImageDataUrl } from './wechat-media.mjs';
+import { extractLocalDocument } from './document-extract.mjs';
+import { distillArticleStage, getWorkflowState, humanizeArticleStage, layoutArticleStage, recordWorkflowSubmission, reviewArticleStage, runPublishingWorkflow, skipHumanizeArticleStage } from '../src/workflow.js';
 
 applyProtectedLocalConfig(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
 const args = process.argv.slice(2);
@@ -37,7 +39,7 @@ async function applyIntent(intent, label) {
   const result = reduceDocument(state.doc, intent, state.selectedId);
   if (result.error) return { ...state, error: result.error, changed: false };
   let finalResult = result;
-  if (result.changed && intent.type !== 'optimizeWechat') {
+  if (result.changed && !['optimizeWechat', 'autoFormat'].includes(intent.type)) {
     const automatic = reduceDocument(result.doc, { type: 'optimizeWechat' }, result.selectedId);
     if (automatic.changed) finalResult = { ...result, doc: automatic.doc, selectedId: automatic.selectedId, optimization: automatic.optimization, autoOptimized: true };
   }
@@ -46,7 +48,7 @@ async function applyIntent(intent, label) {
   state.doc = next; state.selectedId = finalResult.selectedId;
   const historyLabel = finalResult.autoOptimized ? `${label}（自动微信约束优化）` : label;
   state.history = [...(state.history || []), { seq: next.meta.revision, ts: next.meta.updatedAt, label: historyLabel, doc: clone(next) }].slice(-50); state.future = [];
-  await saveState(state); return { ...state, changed: true, optimization: finalResult.optimization || null };
+  await saveState(state); return { ...state, changed: true, optimization: finalResult.optimization || null, formatting: finalResult.formatting || null };
 }
 async function optimizeStateForWechat(state) {
   const result = reduceDocument(state.doc, { type: 'optimizeWechat' }, state.selectedId);
@@ -128,6 +130,97 @@ async function importFromInput() {
   }
   await saveState(state);
   return { ...state, guidance: getLayoutGuidance(state.doc), warnings: state.doc.meta.importWarnings || [] };
+}
+
+async function runWorkflowCommand() {
+  const articlePath = option('article', option('file'));
+  const inlineText = option('text');
+  let input = {};
+  if (articlePath || inlineText !== undefined) {
+    let text = inlineText !== undefined ? inlineText : '';
+    let filename = articlePath ? basename(articlePath) : 'pasted-article.txt';
+    let warnings = [];
+    if (articlePath) {
+      const resolvedArticle = resolve(articlePath);
+      const buffer = await readFile(resolvedArticle);
+      if (/\.docx$/i.test(filename) || /\.pdf$/i.test(filename)) {
+        const extracted = await extractLocalDocument({ buffer, filename });
+        text = extracted.text;
+        warnings = extracted.warnings || [];
+      } else text = buffer.toString('utf8');
+    }
+    const assets = await Promise.all((await collectImagePaths()).map(assetFromFile));
+    input = { text, filename, assets };
+    const result = runPublishingWorkflow(input, {
+      generateImages: option('generate-images', 'true') !== 'false',
+      maxGenerated: Number(option('max-generated', 3)),
+      autoImageCount: option('auto-image-count', 'true') !== 'false',
+      autoFix: option('auto-fix', 'true') !== 'false',
+      humanizeMode: option('humanize-mode', option('humanize', 'off')),
+      applyHumanize: option('apply-humanize', 'false') === 'true'
+    });
+    if (warnings.length) {
+      result.doc.meta.importWarnings = [...new Set([...(result.doc.meta.importWarnings || []), ...warnings.map(item => `本地文档识别提示：${item}`)])];
+      const recognize = result.doc.meta.workflow?.stages?.recognize;
+      if (recognize?.report) recognize.report.warnings = result.doc.meta.importWarnings;
+    }
+    const state = stateFromDocument(result.doc);
+    await saveState(state);
+    if (option('submit') === 'true') {
+      if (!result.readyForSubmit) throw new Error(`公众号审核未通过：${result.reports.review.errors?.[0]?.message || '请先处理审核问题'}`);
+      const delivery = await publishFromState({ allowRemote: true });
+      const saved = await loadState();
+      saved.doc = recordWorkflowSubmission(saved.doc, delivery.delivery || { status: 'ready', mode: 'local-bundle' });
+      await saveState(saved);
+      return { workflow: getWorkflowState(saved.doc), reports: result.reports, readyForSubmit: result.readyForSubmit, delivery };
+    }
+    return { workflow: getWorkflowState(state.doc), reports: result.reports, readyForSubmit: result.readyForSubmit, submission: { ok: result.submission.ok, stage: result.submission.stage } };
+  }
+
+  const state = await loadState();
+  const result = runPublishingWorkflow({ doc: state.doc }, {
+    generateImages: option('generate-images', 'true') !== 'false',
+    maxGenerated: Number(option('max-generated', 3)),
+    autoImageCount: option('auto-image-count', 'true') !== 'false',
+    autoFix: option('auto-fix', 'true') !== 'false',
+    humanizeMode: option('humanize-mode', option('humanize', 'off')),
+    applyHumanize: option('apply-humanize', 'false') === 'true'
+  });
+  const next = stamp(clone(result.doc), state.doc.meta.revision + 1);
+  state.doc = next;
+  state.selectedId = next.blocks[0]?.id || null;
+  state.history = [...(state.history || []), { seq: next.meta.revision, ts: next.meta.updatedAt, label: '工作流：识别→自然化(可选)→提炼→排版→审核', doc: clone(next) }].slice(-50);
+  state.future = [];
+  await saveState(state);
+  if (option('submit') === 'true') {
+    if (!result.readyForSubmit) throw new Error(`公众号审核未通过：${result.reports.review.errors?.[0]?.message || '请先处理审核问题'}`);
+    const delivery = await publishFromState({ allowRemote: true });
+    const saved = await loadState();
+    saved.doc = recordWorkflowSubmission(saved.doc, delivery.delivery || { status: 'ready', mode: 'local-bundle' });
+    await saveState(saved);
+    return { workflow: getWorkflowState(saved.doc), reports: result.reports, readyForSubmit: result.readyForSubmit, delivery };
+  }
+  return { workflow: getWorkflowState(state.doc), reports: result.reports, readyForSubmit: result.readyForSubmit, submission: { ok: result.submission.ok, stage: result.submission.stage } };
+}
+
+async function runSingleWorkflowStage(stageName) {
+  const state = await loadState();
+  let result;
+  if (stageName === 'humanize') result = option('skip', 'false') === 'true'
+    ? skipHumanizeArticleStage(state.doc)
+    : humanizeArticleStage(state.doc, { mode: option('mode', 'natural'), apply: option('apply', 'false') === 'true' });
+  else if (stageName === 'distill') result = distillArticleStage(state.doc);
+  else if (stageName === 'layout') result = layoutArticleStage(state.doc, { generateImages: option('generate-images', 'true') !== 'false', maxGenerated: Number(option('max-generated', 3)), autoImageCount: option('auto-image-count', 'true') !== 'false' });
+  else if (stageName === 'review') result = reviewArticleStage(state.doc, { autoFix: option('auto-fix', 'true') !== 'false' });
+  else throw new Error(`不支持的工作流阶段：${stageName}`);
+  const next = stamp(clone(result.doc), state.doc.meta.revision + 1);
+  state.doc = next;
+  state.selectedId = next.blocks[0]?.id || null;
+  state.history = [...(state.history || []), { seq: next.meta.revision, ts: next.meta.updatedAt, label: `工作流阶段：${stageName}`, doc: clone(next) }].slice(-50);
+  state.future = [];
+  await saveState(state);
+  const report = result.report || result.optimization || null;
+  return { workflow: getWorkflowState(state.doc), report, readyForSubmit: getWorkflowState(state.doc).readyForSubmit };
 }
 function renderHtml(doc) { return renderArticleHtml(doc); }
 function dataUrlParts(dataUrl = '') { return parseImageDataUrl(dataUrl); }
@@ -326,10 +419,16 @@ try {
   if (command === 'init') output(await saveState(await loadState()));
   else if (command === 'state') output(await loadState());
   else if (command === 'import') output(await importFromInput());
+  else if (command === 'workflow' || command === 'pipeline') output(await runWorkflowCommand());
+  else if (command === 'distill') output(await runSingleWorkflowStage('distill'));
+  else if (command === 'humanize-stage') output(await runSingleWorkflowStage('humanize'));
+  else if (command === 'layout-stage') output(await runSingleWorkflowStage('layout'));
+  else if (command === 'review') output(await runSingleWorkflowStage('review'));
   else if (command === 'guidance') { const state = await loadState(); output({ guidance: getLayoutGuidance(state.doc), warnings: state.doc.meta.importWarnings || [] }); }
   else if (command === 'growth') { const state = await loadState(); output(analyzeGrowth(state.doc, growthProfile())); }
   else if (command === 'growth-brief') { const state = await loadState(); output(growthBrief(state.doc, growthProfile())); }
   else if (command === 'wechat-optimize' || command === 'optimize-wechat') output(await applyIntent({ type: 'optimizeWechat' }, '智能优化微信发布约束'));
+  else if (command === 'format' || command === 'auto-format' || command === '排版优化') output(await applyIntent({ type: 'autoFormat' }, '一键优化公众号排版'));
   else if (command === 'wechat-check' || command === 'check-wechat') {
     const before = await loadState();
     const optimization = await optimizeStateForWechat(before);
@@ -400,4 +499,4 @@ try {
   }
   else if (command === 'publish') output(await publishFromState());
   else if (command === 'draft-submit') { if (option('confirm') !== 'true') throw new Error('提交草稿箱前必须显式传入 --confirm true'); output(await publishFromState({ allowRemote: true })); }
-  else console.log('公众号排版 CLI\n\ninit\nimport --article article.md --images ./images\nimport --text "文章内容" --image cover.png\nvisuals --max-generated 3\ncover-set\ncover-import --image assets/covers/cover.jpg --width 900 --height 383\nviral-title\nassets-fill\nwechat-check\nwechat-optimize\nguidance\ngrowth [--profile .local-data/growth-profile.json]\ngrowth-brief [--profile .local-data/growth-profile.json]\nstate\ndraft-status\ndraft-submit --confirm true\ntext --text "标题：文章标题"\nhumanize --mode natural\nintent --json \'{"type":"appendBlock","blockType":"paragraph","text":"正文"}\'\nexport --out article.html\npublish --out .local-data/publish/revision-1');} catch (error) { console.error(error.message); process.exitCode = 1; }
+  else console.log('公众号排版 CLI\n\ninit\nimport --article article.md --images ./images\nworkflow --article article.md --images ./images\nworkflow --article article.md --humanize-mode natural\nworkflow --article article.md --humanize-mode natural --apply-humanize true\nworkflow --text "文章内容" --submit true\nhumanize-stage --mode natural\nhumanize-stage --mode natural --apply true\ndistill\nlayout-stage\nreview\nvisuals --max-generated 3\ncover-set\ncover-import --image assets/covers/cover.jpg --width 900 --height 383\nviral-title\nassets-fill\nwechat-check\nwechat-optimize\nguidance\ngrowth [--profile .local-data/growth-profile.json]\ngrowth-brief [--profile .local-data/growth-profile.json]\nstate\ndraft-status\ndraft-submit --confirm true\ntext --text "标题：文章标题"\nhumanize --mode natural\nintent --json \'{"type":"appendBlock","blockType":"paragraph","text":"正文"}\'\nexport --out article.html\npublish --out .local-data/publish/revision-1');} catch (error) { console.error(error.message); process.exitCode = 1; }

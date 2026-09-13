@@ -9,13 +9,29 @@ export const THEMES = Object.freeze({
   editorial: { id: 'editorial', label: '杂志', accent: '#9a5b35', surface: '#fbf4ec', ink: '#3f3027', heading: 'Georgia,"Songti SC","SimSun",serif' },
   fresh: { id: 'fresh', label: '清新', accent: '#218a9b', surface: '#effafa', ink: '#21464b', heading: 'system-ui,"PingFang SC","Microsoft YaHei",sans-serif' },
   ink: { id: 'ink', label: '墨韵', accent: '#7657b8', surface: '#f2effb', ink: '#302745', heading: 'Georgia,"Songti SC","SimSun",serif' },
-  sunset: { id: 'sunset', label: '暖阳', accent: '#e45f3f', surface: '#fff0e7', ink: '#4a2a22', heading: 'system-ui,"PingFang SC","Microsoft YaHei",sans-serif' }
+  sunset: { id: 'sunset', label: '暖阳', accent: '#e45f3f', surface: '#fff0e7', ink: '#4a2a22', heading: 'system-ui,"PingFang SC","Microsoft YaHei",sans-serif' },
+  official: {
+    id: 'official',
+    label: '微信官方深色',
+    accent: '#19d875',
+    surface: '#171a19',
+    soft: '#222725',
+    ink: '#e8eeeb',
+    muted: '#a6b0ab',
+    line: '#3a433e',
+    heading: 'system-ui,"PingFang SC","Microsoft YaHei",sans-serif',
+    articleBackground: '#121413',
+    imageMaxWidth: 92,
+    imageRadius: 5,
+    titleAlign: 'left',
+    dark: true
+  }
 });
 
 export function normalizeTheme(theme = 'minimal') {
   const value = String(theme).trim().toLowerCase();
   if (THEMES[value]) return value;
-  const aliases = { '极简': 'minimal', '杂志': 'editorial', '编辑': 'editorial', '清新': 'fresh', '墨韵': 'ink', '暖阳': 'sunset' };
+  const aliases = { '极简': 'minimal', '杂志': 'editorial', '编辑': 'editorial', '清新': 'fresh', '墨韵': 'ink', '暖阳': 'sunset', '官方深色': 'official', '微信官方深色': 'official', '深色官方': 'official' };
   return aliases[String(theme).trim()] || 'minimal';
 }
 
@@ -55,6 +71,241 @@ export function humanizeDocument(doc, mode = 'natural') {
   });
   next.meta = { ...next.meta, humanizer: { mode, changedBlocks, appliedAt: new Date().toISOString() } };
   return applyArticleEmphasis(next);
+}
+
+export const WECHAT_LAYOUT_PROFILE = Object.freeze({
+  version: 2,
+  bodyFontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans CJK SC',sans-serif",
+  bodyFontSize: 16,
+  bodyLineHeight: 1.95,
+  paragraphGap: 18,
+  headingGap: 30,
+  quoteGap: 22
+});
+
+function clampLayoutNumber(value, minimum, maximum, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.min(maximum, Math.max(minimum, numeric)) : fallback;
+}
+
+export function getWechatLayoutProfile(doc = {}) {
+  const theme = THEMES[normalizeTheme(doc.theme)];
+  const storedProfile = doc.meta?.layoutProfile || {};
+  const stored = storedProfile.themeId === theme.id ? storedProfile : {};
+  return {
+    version: WECHAT_LAYOUT_PROFILE.version,
+    themeId: theme.id,
+    bodyFontFamily: WECHAT_LAYOUT_PROFILE.bodyFontFamily,
+    headingFontFamily: String(stored.headingFontFamily || theme.heading).replace(/"/g, "'"),
+    bodyFontSize: clampLayoutNumber(stored.bodyFontSize, 15, 18, WECHAT_LAYOUT_PROFILE.bodyFontSize),
+    bodyLineHeight: clampLayoutNumber(stored.bodyLineHeight, 1.7, 2.2, WECHAT_LAYOUT_PROFILE.bodyLineHeight),
+    paragraphGap: clampLayoutNumber(stored.paragraphGap, 12, 28, WECHAT_LAYOUT_PROFILE.paragraphGap),
+    headingGap: clampLayoutNumber(stored.headingGap, 24, 40, WECHAT_LAYOUT_PROFILE.headingGap),
+    quoteGap: clampLayoutNumber(stored.quoteGap, 16, 30, WECHAT_LAYOUT_PROFILE.quoteGap),
+    paragraphAlign: stored.paragraphAlign === 'justify' ? 'justify' : 'left',
+    titleAlign: stored.titleAlign === 'left' || stored.titleAlign === 'right' ? stored.titleAlign : (theme.titleAlign || 'center'),
+    imageMaxWidth: clampLayoutNumber(stored.imageMaxWidth, 70, 100, theme.imageMaxWidth || 100),
+    imageRadius: clampLayoutNumber(stored.imageRadius, 0, 16, theme.imageRadius ?? 8)
+  };
+}
+
+export function getWechatLayoutVariables(doc = {}) {
+  const profile = getWechatLayoutProfile(doc);
+  return [
+    `--wechat-body-font:${profile.bodyFontFamily}`,
+    `--wechat-heading-font:${profile.headingFontFamily}`,
+    `--wechat-body-size:${profile.bodyFontSize}px`,
+    `--wechat-body-leading:${profile.bodyLineHeight}`,
+    `--wechat-paragraph-gap:${profile.paragraphGap}px`,
+    `--wechat-heading-gap:${profile.headingGap}px`,
+    `--wechat-quote-gap:${profile.quoteGap}px`,
+    `--wechat-paragraph-align:${profile.paragraphAlign}`,
+    `--wechat-title-align:${profile.titleAlign}`,
+    `--wechat-image-max:${profile.imageMaxWidth}%`,
+    `--wechat-image-radius:${profile.imageRadius}px`
+  ].join(';') + ';';
+}
+
+function normalizeLayoutText(value = '') {
+  return String(value ?? '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/[ \t]*\n[ \t]*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function splitLayoutParagraph(value, targetChars = 180) {
+  const text = normalizeLayoutText(value);
+  if (!text || charCount(text) <= targetChars) return text ? [text] : [];
+  const sentenceUnits = text.split(/(?<=[。！？!?；;])\s*|\n+/).map(item => item.trim()).filter(Boolean);
+  const units = sentenceUnits.flatMap(unit => {
+    if (charCount(unit) <= targetChars) return [unit];
+    const commaUnits = unit.split(/(?<=[，,、：:])\s*/).map(item => item.trim()).filter(Boolean);
+    if (commaUnits.length > 1) return commaUnits;
+    const chars = [...unit];
+    const chunks = [];
+    for (let index = 0; index < chars.length; index += targetChars) chunks.push(chars.slice(index, index + targetChars).join(''));
+    return chunks;
+  });
+  const paragraphs = [];
+  let current = '';
+  for (const unit of units) {
+    const candidate = current ? `${current}${current.endsWith('\n') ? '' : ' '}${unit}` : unit;
+    if (current && charCount(candidate) > targetChars) {
+      paragraphs.push(current.trim());
+      current = unit;
+    } else current = candidate;
+  }
+  if (current.trim()) paragraphs.push(current.trim());
+  return paragraphs.length ? paragraphs : [text];
+}
+
+function splitEmbeddedSectionText(value) {
+  const text = normalizeLayoutText(value);
+  if (!text) return null;
+  const marker = /(?:第\s*(?:\d+|[一二三四五六七八九十百千万零〇两]+)\s*(?:章节部分条点步项篇回期)?|(?:[一二三四五六七八九十百千万零〇两]+|\d+)\s*[、.．)）])[^。！？!?；;\n]{0,28}[:：]/g;
+  const matches = [...text.matchAll(marker)];
+  if (!matches.length) return null;
+  const parts = [];
+  let cursor = 0;
+  for (const match of matches) {
+    const before = text.slice(cursor, match.index).trim();
+    if (before) parts.push({ type: 'paragraph', text: before });
+    parts.push({ type: 'heading', text: match[0].trim(), level: /^第\s*/.test(match[0]) ? 2 : 3 });
+    cursor = match.index + match[0].length;
+  }
+  const after = text.slice(cursor).trim();
+  if (after) parts.push({ type: 'paragraph', text: after });
+  return parts;
+}
+
+function looksLikeSectionLabel(value = '') {
+  const text = normalizeLayoutText(value);
+  if (charCount(text) < 2 || charCount(text) > 36 || /[。！？!?]$/.test(text)) return false;
+  return /^(?:第\s*(?:\d+|[一二三四五六七八九十百千万零〇两]+)\s*(?:章节部分条点步项篇回期)?|[一二三四五六七八九十百千万零〇两]+\s*[、.．:：]|\d+\s*[.)、:：])/.test(text);
+}
+
+/**
+ * Apply safe, local editorial formatting rules without rewriting meaning.
+ * It normalizes reading rhythm, preserves only detected emphasis ranges, and
+ * records a compact profile consumed by both the preview and inline HTML.
+ */
+export function autoFormatDocument(doc = {}) {
+  const next = clone(doc);
+  const changes = [];
+  const sourceBlocks = Array.isArray(next.blocks) ? next.blocks : [];
+  const formattedBlocks = [];
+  let splitCount = 0;
+  let promotedHeadings = 0;
+  let normalizedBlocks = 0;
+
+  sourceBlocks.forEach((block, index) => {
+    if (!block || typeof block !== 'object') return;
+    const current = { ...block };
+    if (typeof current.text === 'string' && ['heading', 'paragraph', 'quote', 'cta', 'media'].includes(current.type)) {
+      const normalized = normalizeLayoutText(current.text);
+      if (normalized !== current.text) normalizedBlocks += 1;
+      current.text = normalized;
+    }
+    if (current.type === 'heading') {
+      const level = Number(current.level) >= 3 ? 3 : 2;
+      if (current.level !== level) { current.level = level; normalizedBlocks += 1; }
+      formattedBlocks.push(current);
+      return;
+    }
+    if (current.type === 'paragraph') {
+      const embeddedSections = splitEmbeddedSectionText(current.text);
+      if (embeddedSections?.length) {
+        let pieceIndex = 0;
+        for (const section of embeddedSections) {
+          if (section.type === 'heading') {
+            formattedBlocks.push({ ...current, id: pieceIndex === 0 ? current.id : crypto.randomUUID(), type: 'heading', level: section.level, text: section.text });
+            promotedHeadings += 1;
+            pieceIndex += 1;
+            continue;
+          }
+          const paragraphParts = splitLayoutParagraph(section.text, 140);
+          paragraphParts.forEach(text => {
+            formattedBlocks.push({ ...current, id: pieceIndex === 0 ? current.id : crypto.randomUUID(), type: 'paragraph', text });
+            pieceIndex += 1;
+          });
+        }
+        return;
+      }
+      if (looksLikeSectionLabel(current.text) && sourceBlocks[index + 1]?.type !== 'image') {
+        current.type = 'heading';
+        current.level = /^第\s*/.test(current.text) ? 2 : 3;
+        promotedHeadings += 1;
+        formattedBlocks.push(current);
+        return;
+      }
+    }
+    if (current.type !== 'paragraph') {
+      formattedBlocks.push(current);
+      return;
+    }
+    const parts = splitLayoutParagraph(current.text, 140);
+    if (parts.length <= 1) {
+      formattedBlocks.push(current);
+      return;
+    }
+    splitCount += parts.length - 1;
+    parts.forEach((text, partIndex) => {
+      const part = { ...current, id: partIndex === 0 ? current.id : crypto.randomUUID(), text };
+      if (part.emphasisSource === 'auto') {
+        delete part.emphasis;
+        delete part.emphasisLabel;
+        delete part.emphasisRanges;
+        delete part.emphasisSource;
+      }
+      formattedBlocks.push(part);
+    });
+  });
+
+  if (normalizedBlocks) changes.push(`已统一 ${normalizedBlocks} 个区块的空格与段落间距`);
+  if (splitCount) changes.push(`已将 ${splitCount} 处过长段落拆分为手机友好的阅读节奏`);
+  if (promotedHeadings) changes.push(`已识别并整理 ${promotedHeadings} 个章节提示为标题层级`);
+  next.blocks = formattedBlocks;
+  next.theme = normalizeTheme(next.theme);
+  const profile = getWechatLayoutProfile(next);
+  const profileChanged = JSON.stringify(next.meta?.layoutProfile || {}) !== JSON.stringify(profile);
+  if (profileChanged) changes.push('已统一字体、字号、行距、段距和标题层级样式');
+  const beforeEmphasis = JSON.stringify(next.blocks);
+  const emphasized = applyArticleEmphasis(next);
+  if (beforeEmphasis !== JSON.stringify(emphasized.blocks)) changes.push('已按重点、金句和章节编号进行局部加粗或色块标注');
+  next.blocks = emphasized.blocks;
+  if (changes.length || profileChanged) {
+    next.meta = {
+      ...(next.meta || {}),
+      layoutMode: 'auto',
+      layoutProfile: profile,
+      layoutOptimization: {
+        version: 1,
+        appliedAt: new Date().toISOString(),
+        changes,
+        stats: {
+          blocks: next.blocks.length,
+          paragraphs: next.blocks.filter(block => block.type === 'paragraph').length,
+          headings: next.blocks.filter(block => block.type === 'heading').length,
+          highlightedRanges: next.blocks.reduce((total, block) => total + (block.emphasisRanges?.length || 0), 0)
+        }
+      }
+    };
+  }
+  const output = applyArticleEmphasis(next);
+  return {
+    doc: output,
+    changed: JSON.stringify(output) !== JSON.stringify(doc),
+    changes,
+    profile,
+    stats: output.meta?.layoutOptimization?.stats || {
+      blocks: output.blocks.length,
+      paragraphs: output.blocks.filter(block => block.type === 'paragraph').length,
+      headings: output.blocks.filter(block => block.type === 'heading').length,
+      highlightedRanges: output.blocks.reduce((total, block) => total + (block.emphasisRanges?.length || 0), 0)
+    }
+  };
 }
 
 export function createInitialDocument() {
@@ -283,16 +534,17 @@ export function importArticle({ text = '', filename = 'article.md', assets = [],
   };
   const sanitized = sanitizeImportedDocument(document);
   if (!autoCompose) return sanitized;
+  const formatted = autoFormatDocument(sanitized).doc;
   // The visual planner historically reads original.text first. Give it the
   // cleaned structured text so generated titles/SVGs cannot reintroduce
   // Markdown presentation markers, then restore the untouched source below.
-  const composeSource = sanitized.blocks
+  const composeSource = formatted.blocks
     .map(block => block.text || (Array.isArray(block.items) ? block.items.join('\n') : ''))
     .filter(Boolean)
     .join('\n');
   const composed = autoComposeDocument({
-    ...sanitized,
-    original: { ...sanitized.original, text: composeSource }
+    ...formatted,
+    original: { ...formatted.original, text: composeSource }
   }, visualOptions);
   composed.original = document.original;
   return sanitizeImportedDocument(composed);
@@ -702,7 +954,9 @@ export function parseCommand(input) {
   if (/^(?:拆分|分割)(?:当前|选中)?(?:段落|内容|块)?$/i.test(raw)) return { type: 'splitSelected' };
   if ((m = raw.match(/^(?:主题|样式)[：:]?\s*(.+)$/i))) return { type: 'setTheme', theme: normalizeTheme(m[1].trim()) };
   if ((m = raw.match(/^(?:去\s*AI\s*味|自然化|润色)(?:[：:]?\s*(保守|自然|conservative|natural))?$/i))) return { type: 'humanize', mode: /保守|conservative/i.test(m[1] || '') ? 'conservative' : 'natural' };
+  if (/^(?:根据)?核心(?:内容)?生成(?:两|2)张主题(?:图片|图)$/i.test(raw)) return { type: 'generateCoreThemeImages', count: 2 };
   if (/^(?:提炼核心(?:内容)?(?:并)?生成(?:一张)?标题图|生成标题(?:图片|图))$/i.test(raw)) return { type: 'generateTitleImage' };
+  if (/^(?:一键优化排版|自动优化排版|优化公众号排版|排版优化|自动排版)$/i.test(raw)) return { type: 'autoFormat' };
   if (/^(?:智能配图|自动配图|自动标题(?:图文)?)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, autoImageCount: true, titleMode: 'viral' };
   // The former import-style command is intentionally retired so it cannot
   // accidentally append the phrase as a paragraph. Use “封面一键设置”.
@@ -782,6 +1036,10 @@ export function reduceDocument(doc, intent, selectedId = null) {
       next.theme = theme;
       break;
     }
+    case 'autoFormat': {
+      const formatted = autoFormatDocument(next);
+      return { doc: formatted.doc, selectedId: formatted.doc.blocks.find(block => block.id === selectedId)?.id || formatted.doc.blocks[0]?.id || null, changed: formatted.changed, formatting: formatted };
+    }
     case 'humanize': {
       const humanized = humanizeDocument(next, intent.mode || 'natural');
       return { doc: humanized, selectedId, changed: true };
@@ -796,7 +1054,8 @@ export function reduceDocument(doc, intent, selectedId = null) {
         titleProfile: intent.titleProfile || {},
         fillUnmatched: intent.fillUnmatched === true,
         autoImageCount: intent.autoImageCount === true,
-        maxBodyImages: Number.isFinite(Number(intent.maxBodyImages)) ? Number(intent.maxBodyImages) : undefined
+        maxBodyImages: Number.isFinite(Number(intent.maxBodyImages)) ? Number(intent.maxBodyImages) : undefined,
+        coreThemeCount: Number.isFinite(Number(intent.coreThemeCount)) ? Number(intent.coreThemeCount) : 0
       });
       return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
     }
@@ -828,6 +1087,20 @@ export function reduceDocument(doc, intent, selectedId = null) {
         forceTitle: false,
         fillUnmatched: false,
         useCoreForCover: true
+      });
+      return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
+    }
+    case 'generateCoreThemeImages': {
+      const count = Math.min(4, Math.max(1, Number(intent.count) || 2));
+      const composed = autoComposeDocument(next, {
+        generate: true,
+        maxGenerated: 0,
+        includeCover: false,
+        titleMode: 'safe',
+        forceTitle: false,
+        fillUnmatched: false,
+        autoImageCount: false,
+        coreThemeCount: count
       });
       return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
     }
@@ -1021,6 +1294,36 @@ export function reduceDocument(doc, intent, selectedId = null) {
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 
+function compactImageCaption(value = '') {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return text ? truncateByChars(text, 48) : '';
+}
+
+function imageCaption(block = {}, asset = {}, sequence = 1) {
+  const explicit = block.caption || asset.caption || asset.vision?.caption;
+  if (explicit) return compactImageCaption(explicit);
+  if (block.generatedBy || asset.generated) {
+    if (block.visualRole === 'theme' || asset.visualRole === 'theme') {
+      const themeSequence = Number.isFinite(Number(asset.themeIndex)) ? Number(asset.themeIndex) + 1 : sequence;
+      return `核心主题图 ${String(themeSequence).padStart(2, '0')}`;
+    }
+    if (block.visualRole === 'section' || asset.visualRole === 'section' || block.visualRole === 'library-auto') return `正文配图 ${String(sequence).padStart(2, '0')}`;
+  }
+  const fallback = compactImageCaption(block.text);
+  return [...fallback].length <= 28 ? fallback : '';
+}
+
+function imageDataAttributes(asset = {}) {
+  const width = Number(asset.width) > 0 ? Math.round(Number(asset.width)) : 0;
+  const height = Number(asset.height) > 0 ? Math.round(Number(asset.height)) : 0;
+  const type = String(asset.type || '').split('/')[1] || '';
+  return [
+    width ? `data-w="${width}"` : '',
+    height ? `data-h="${height}"` : '',
+    type ? `data-type="${escapeHtml(type)}"` : ''
+  ].filter(Boolean).join(' ');
+}
+
 /** Render only the detected editorial ranges, keeping the surrounding text plain. */
 export function renderInlineEmphasis(value = '', ranges = [], { markAttrs = ' class="inline-emphasis"', strongAttrs = ' class="inline-emphasis"' } = {}) {
   const text = String(value ?? '');
@@ -1123,12 +1426,16 @@ export function renderDocumentBody(doc) {
   const coverAsset = getCoverAsset(doc);
   const coverCopy = getCoverCopy(doc, coverAsset);
   const coverMarkup = coverAsset?.dataUrl
-    ? `<figure class="wechat-cover${coverAsset.generated ? ' wechat-cover-generated' : ''}" data-wechat-cover="true"><img src="${escapeHtml(coverAsset.dataUrl)}" alt="${escapeHtml(coverAsset.alt || doc.title || '文章封面')}"><figcaption class="wechat-cover-copy"><strong>${escapeHtml(coverCopy.main)}</strong><span>${escapeHtml(coverCopy.sub)}</span></figcaption></figure>`
+    ? `<figure class="wechat-cover${coverAsset.generated ? ' wechat-cover-generated' : ''}" data-wechat-cover="true"><img src="${escapeHtml(coverAsset.dataUrl)}" ${imageDataAttributes(coverAsset)} alt="${escapeHtml(coverAsset.alt || doc.title || '文章封面')}"><figcaption class="wechat-cover-copy"><strong>${escapeHtml(coverCopy.main)}</strong><span>${escapeHtml(coverCopy.sub)}</span></figcaption></figure>`
     : `<div class="wechat-cover wechat-cover-placeholder" data-wechat-cover="true">封面图片位置 · 请从素材库插入或导入一张封面图</div>`;
+  let imageSequence = 0;
   const renderBlock = block => {
     if (coverBlock && block.id === coverBlock.id) return '';
     const text = renderInlineEmphasis(block.text || '', block.emphasisRanges);
-    if (block.type === 'heading') return `<h2>${text}</h2>`;
+    if (block.type === 'heading') {
+      const tag = Number(block.level) >= 3 ? 'h3' : 'h2';
+      return `<${tag}>${text}</${tag}>`;
+    }
     if (block.type === 'quote') return `<blockquote>${text}</blockquote>`;
     if (block.type === 'list') {
       const items = (block.items || String(block.text || '').split('\n')).filter(Boolean).map(item => `<li>${escapeHtml(item)}</li>`).join('');
@@ -1141,13 +1448,16 @@ export function renderDocumentBody(doc) {
     }
     if (block.type === 'cta') return `<div class="cta"><p>${text}</p><a href="${escapeHtml(block.href || '#')}">${escapeHtml(block.buttonText || '立即了解')}</a></div>`;
     if (block.type === 'gallery') {
-      const images = (block.assetIds || []).map(id => assetById(id)).filter(Boolean).map(asset => `<img src="${escapeHtml(asset.dataUrl)}" alt="${escapeHtml(asset.alt || asset.name)}">`).join('');
+      const images = (block.assetIds || []).map(id => assetById(id)).filter(Boolean).map(asset => `<img src="${escapeHtml(asset.dataUrl)}" ${imageDataAttributes(asset)} alt="${escapeHtml(asset.alt || asset.name)}">`).join('');
       return `<div class="gallery">${images || `<p>${text}</p>`}</div>`;
     }
     if (block.type === 'media') return `<div class="media"><span>${escapeHtml(block.mediaType || 'media')}</span><a href="${escapeHtml(block.url || '#')}">${text || '打开媒体内容'}</a></div>`;
     if (block.type === 'image') {
       const asset = assetById(block.assetId);
-      return asset?.dataUrl ? `<figure><img src="${escapeHtml(asset.dataUrl)}" alt="${text}"><figcaption>${text}</figcaption></figure>` : `<div class="missing-image">${text || '图片素材已丢失'}</div>`;
+      if (!asset?.dataUrl) return `<div class="missing-image">${text || '图片素材已丢失'}</div>`;
+      imageSequence += 1;
+      const caption = imageCaption(block, asset, imageSequence);
+      return `<figure class="wechat-image-figure"><img src="${escapeHtml(asset.dataUrl)}" ${imageDataAttributes(asset)} alt="${escapeHtml(asset.alt || block.text || asset.name || '文章配图')}">${caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : ''}</figure>`;
     }
     return `<p>${text}</p>`;
   };
@@ -1157,40 +1467,55 @@ export function renderDocumentBody(doc) {
 
 export function renderArticleHtml(doc) {
   const theme = THEMES[normalizeTheme(doc.theme)];
+  const layout = getWechatLayoutProfile(doc);
+  const articleBackground = theme.articleBackground || (theme.surface === '#f5f7f8' ? '#fff' : theme.surface);
+  const softSurface = theme.soft || theme.surface;
+  const mutedInk = theme.muted || '#75808b';
+  const themeLine = theme.line || '#dfe7ee';
+  const imageMaxWidth = `${layout.imageMaxWidth}%`;
+  const headingDecoration = theme.dark
+    ? `border-left:0;border-bottom:1px solid ${theme.accent};padding:0 0 9px;border-radius:0;background:transparent;`
+    : `padding:8px 11px;border-left:4px solid ${theme.accent};background:${softSurface};border-radius:0 7px 7px 0;`;
+  const subheadingDecoration = theme.dark
+    ? `border-left:0;border-bottom:1px solid ${themeLine};padding:0 0 7px;`
+    : `padding-left:10px;border-left:3px solid ${theme.accent};`;
   const styles = {
-    article: `max-width:677px;margin:0 auto;padding:28px 20px;background:${theme.surface === '#f5f7f8' ? '#fff' : theme.surface};color:${theme.ink};line-height:1.9;`,
-    title: `font-family:${theme.heading};font-size:26px;line-height:1.35;margin:0 0 10px;text-align:center;color:${theme.ink};`,
-    subtitle: 'color:#75808b;margin:0 0 6px;text-align:center;',
-    meta: 'font-size:12px;color:#a0a8b0;margin-bottom:28px;text-align:center;',
-     heading: `font-family:${theme.heading};font-size:20px;margin:28px 0 12px;padding-left:10px;border-left:4px solid ${theme.accent};color:${theme.ink};`,
-    paragraph: 'font-size:16px;line-height:1.9;text-align:justify;white-space:pre-wrap;margin:16px 0;',
-    inlineMark: `background:#fff1cf;color:${theme.ink};font-weight:700;padding:0 .18em;border-radius:3px;`,
-    inlineStrong: `font-weight:700;color:${theme.ink};`,
-    quote: `margin:20px 0;padding:13px 15px;background:${theme.surface};border-left:3px solid ${theme.accent};color:#66727c;`,
-     imageFigure: 'margin:22px 0;text-align:center;',
-     image: 'max-width:100%;display:block;margin:0 auto;border-radius:4px;',
-     caption: 'text-align:center;color:#9aa4ad;font-size:12px;margin-top:6px;',
-     coverFigure: 'margin:-28px -20px 22px;text-align:center;',
-     coverImage: 'width:100%;aspect-ratio:900 / 383;object-fit:cover;display:block;',
-     coverCopy: 'padding:8px 12px;background:#f7f8fa;text-align:left;',
-     coverMain: `display:block;font-size:16px;font-weight:700;line-height:1.35;color:${theme.ink};`,
-     coverSub: 'display:block;margin-top:2px;font-size:12px;line-height:1.45;color:#75808b;',
-     summary: `margin:10px 0 22px;padding:10px 12px;background:${theme.surface};border-radius:7px;font-size:13px;line-height:1.65;color:#5f6d7b;`,
-     summaryLabel: `display:block;margin-bottom:3px;font-size:11px;font-weight:700;color:${theme.accent};`,
-    list: 'padding-left:24px;font-size:16px;line-height:1.9;margin:14px 0;',
-    listItem: 'margin:6px 0;line-height:1.75;',
-    tableWrap: 'overflow-x:auto;margin:18px 0;',
-    table: 'width:100%;border-collapse:collapse;font-size:14px;',
-    cell: 'padding:8px;border:1px solid #dfe7ee;text-align:left;',
-    headerCell: `padding:8px;border:1px solid #dfe7ee;text-align:left;background:${theme.surface};`,
-    cta: `text-align:center;margin:26px 0;padding:20px;background:${theme.surface};border-radius:10px;`,
+    article: `width:100%;max-width:677px;box-sizing:border-box;margin:0 auto;padding:24px 20px 32px;background:${articleBackground};color:${theme.ink};font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};word-break:break-word;overflow-wrap:anywhere;`,
+    title: `font-family:${layout.headingFontFamily};font-size:26px;line-height:1.4;letter-spacing:.02em;margin:0 0 10px;text-align:${layout.titleAlign};color:${theme.ink};`,
+    subtitle: `color:${mutedInk};margin:0 0 6px;text-align:${layout.titleAlign};line-height:1.7;`,
+    meta: `font-size:12px;color:${mutedInk};margin-bottom:26px;text-align:${layout.titleAlign};line-height:1.5;`,
+    heading: `font-family:${layout.headingFontFamily};font-size:20px;line-height:1.5;margin:${layout.headingGap}px 0 13px;color:${theme.ink};${headingDecoration}`,
+    subheading: `font-family:${layout.headingFontFamily};font-size:18px;line-height:1.5;margin:24px 0 11px;color:${theme.ink};${subheadingDecoration}`,
+    paragraph: `font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};text-align:${layout.paragraphAlign};white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;margin:${layout.paragraphGap}px 0;color:${theme.ink};`,
+    inlineMark: theme.dark
+      ? `background:rgba(25,216,117,.16);color:${theme.accent};font-weight:700;padding:0 .18em;border-radius:3px;`
+      : `background:#fff1cf;color:${theme.ink};font-weight:700;padding:0 .18em;border-radius:3px;`,
+    inlineStrong: `font-weight:700;color:${theme.dark ? theme.accent : theme.ink};`,
+    quote: `margin:${layout.quoteGap}px 0;padding:15px 17px;background:${softSurface};border-left:4px solid ${theme.accent};color:${mutedInk};line-height:1.85;`,
+    imageFigure: 'margin:24px 0;text-align:center;',
+    image: `width:100%;max-width:${imageMaxWidth};height:auto;display:block;margin:0 auto;border-radius:${layout.imageRadius}px;vertical-align:top;${theme.dark ? `border:1px solid ${themeLine};background:${theme.articleBackground};` : ''}`,
+    caption: `display:block;text-align:center;color:${mutedInk};font-size:12px;line-height:1.5;margin:8px 8px 0;overflow-wrap:anywhere;`,
+    coverFigure: 'margin:-24px -20px 24px;text-align:center;',
+    coverImage: 'width:100%;max-width:100%;height:auto;display:block;vertical-align:top;',
+    coverCopy: `padding:9px 12px;background:${softSurface};text-align:left;`,
+    coverMain: `display:block;font-size:16px;font-weight:700;line-height:1.4;color:${theme.ink};`,
+    coverSub: `display:block;margin-top:3px;font-size:12px;line-height:1.5;color:${mutedInk};`,
+    summary: `margin:10px 0 24px;padding:11px 13px;background:${softSurface};border-left:3px solid ${theme.accent};border-radius:0 7px 7px 0;font-size:13px;line-height:1.7;color:${mutedInk};`,
+    summaryLabel: `display:block;margin-bottom:3px;font-size:11px;font-weight:700;color:${theme.accent};`,
+    list: 'width:100%;max-width:100%;padding-left:24px;font-size:16px;line-height:1.9;margin:16px 0;overflow-wrap:anywhere;',
+    listItem: 'margin:7px 0;line-height:1.8;overflow-wrap:anywhere;',
+    tableWrap: 'width:100%;max-width:100%;overflow-x:auto;margin:20px 0;',
+    table: 'width:100%;max-width:100%;border-collapse:collapse;table-layout:fixed;font-size:14px;',
+    cell: `padding:8px;border:1px solid ${themeLine};text-align:left;color:${theme.ink};overflow-wrap:anywhere;word-break:break-word;`,
+    headerCell: `padding:8px;border:1px solid ${themeLine};text-align:left;background:${softSurface};color:${theme.ink};overflow-wrap:anywhere;word-break:break-word;`,
+    cta: `text-align:center;margin:26px 0;padding:20px;background:${softSurface};border-radius:10px;`,
     ctaLink: `display:inline-block;padding:8px 18px;border-radius:999px;background:${theme.accent};color:#fff;text-decoration:none;`,
     gallery: 'display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:20px 0;',
-    galleryImage: 'width:100%;aspect-ratio:1;object-fit:cover;border-radius:4px;',
-    media: `display:flex;gap:10px;align-items:center;padding:14px;margin:18px 0;background:${theme.surface};border-radius:8px;`,
+    galleryImage: `width:100%;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:${layout.imageRadius}px;vertical-align:top;`,
+    media: `display:flex;gap:10px;align-items:center;padding:14px;margin:18px 0;background:${softSurface};border-radius:8px;`,
     mediaLink: `color:${theme.accent};`,
     missing: 'padding:20px;background:#fff3f3;color:#b42318;',
-    hashtags: 'margin:26px 0 0;padding:12px 14px;border-top:1px solid #dfe7ee;font-size:13px;line-height:1.8;color:#617180;',
+    hashtags: `margin:26px 0 0;padding:12px 14px;border-top:1px solid ${themeLine};font-size:13px;line-height:1.8;color:${mutedInk};`,
     hashtag: `display:inline-block;margin:0 6px 4px 0;color:${theme.accent};`
   };
   const assets = doc.assets || [];
@@ -1199,12 +1524,16 @@ export function renderArticleHtml(doc) {
   const coverAsset = getCoverAsset(doc);
   const coverCopy = getCoverCopy(doc, coverAsset);
   const coverMarkup = coverAsset?.dataUrl
-    ? `<figure style="${styles.coverFigure}" data-wechat-cover="true"><img style="${styles.coverImage}" src="${escapeHtml(coverAsset.dataUrl)}" alt="${escapeHtml(coverAsset.alt || doc.title || '文章封面')}"><figcaption style="${styles.coverCopy}${coverAsset.generated ? 'display:none;' : ''}"><strong style="${styles.coverMain}">${escapeHtml(coverCopy.main)}</strong><span style="${styles.coverSub}">${escapeHtml(coverCopy.sub)}</span></figcaption></figure>`
+    ? `<figure style="${styles.coverFigure}" data-wechat-cover="true"><img style="${styles.coverImage}" src="${escapeHtml(coverAsset.dataUrl)}" ${imageDataAttributes(coverAsset)} alt="${escapeHtml(coverAsset.alt || doc.title || '文章封面')}"><figcaption style="${styles.coverCopy}${coverAsset.generated ? 'display:none;' : ''}"><strong style="${styles.coverMain}">${escapeHtml(coverCopy.main)}</strong><span style="${styles.coverSub}">${escapeHtml(coverCopy.sub)}</span></figcaption></figure>`
     : '';
+  let imageSequence = 0;
   const renderInlineBlock = block => {
     if (coverBlock && block.id === coverBlock.id) return '';
     const text = renderInlineEmphasis(block.text || '', block.emphasisRanges, { markAttrs: ` style="${styles.inlineMark}"`, strongAttrs: ` style="${styles.inlineStrong}"` });
-    if (block.type === 'heading') return `<h2 style="${styles.heading}">${text}</h2>`;
+    if (block.type === 'heading') {
+      const tag = Number(block.level) >= 3 ? 'h3' : 'h2';
+      return `<${tag} style="${Number(block.level) >= 3 ? styles.subheading : styles.heading}">${text}</${tag}>`;
+    }
     if (block.type === 'quote') return `<blockquote style="${styles.quote}">${text}</blockquote>`;
     if (block.type === 'list') {
       const items = (block.items || String(block.text || '').split('\\n')).filter(Boolean).map(item => `<li style="${styles.listItem}">${escapeHtml(item)}</li>`).join('');
@@ -1217,13 +1546,16 @@ export function renderArticleHtml(doc) {
     }
     if (block.type === 'cta') return `<div style="${styles.cta}"><p style="${styles.paragraph}">${text}</p><a style="${styles.ctaLink}" href="${escapeHtml(block.href || '#')}">${escapeHtml(block.buttonText || '立即了解')}</a></div>`;
     if (block.type === 'gallery') {
-      const images = (block.assetIds || []).map(id => assetById(id)).filter(Boolean).map(asset => `<img style="${styles.galleryImage}" src="${escapeHtml(asset.dataUrl)}" alt="${escapeHtml(asset.alt || asset.name)}">`).join('');
+      const images = (block.assetIds || []).map(id => assetById(id)).filter(Boolean).map(asset => `<img style="${styles.galleryImage}" src="${escapeHtml(asset.dataUrl)}" ${imageDataAttributes(asset)} alt="${escapeHtml(asset.alt || asset.name)}">`).join('');
       return `<div style="${styles.gallery}">${images || `<p style="${styles.paragraph}">${text}</p>`}</div>`;
     }
     if (block.type === 'media') return `<div style="${styles.media}"><span>${escapeHtml(block.mediaType || 'media')}</span><a style="${styles.mediaLink}" href="${escapeHtml(block.url || '#')}">${text || '打开媒体内容'}</a></div>`;
     if (block.type === 'image') {
       const asset = assetById(block.assetId);
-      return asset?.dataUrl ? `<figure style="${styles.imageFigure}"><img style="${styles.image}" src="${escapeHtml(asset.dataUrl)}" alt="${text}"><figcaption style="${styles.caption}">${text}</figcaption></figure>` : `<div style="${styles.missing}">${text || '图片素材已丢失'}</div>`;
+      if (!asset?.dataUrl) return `<div style="${styles.missing}">${text || '图片素材已丢失'}</div>`;
+      imageSequence += 1;
+      const caption = imageCaption(block, asset, imageSequence);
+      return `<figure style="${styles.imageFigure}" class="wechat-image-figure"><img style="${styles.image}" src="${escapeHtml(asset.dataUrl)}" ${imageDataAttributes(asset)} alt="${escapeHtml(asset.alt || block.text || asset.name || '文章配图')}">${caption ? `<figcaption style="${styles.caption}">${escapeHtml(caption)}</figcaption>` : ''}</figure>`;
     }
     return `<p style="${styles.paragraph}">${text}</p>`;
   };

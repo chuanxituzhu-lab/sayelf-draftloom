@@ -8,7 +8,9 @@ import { APP_VERSION } from '../src/version.js';
 const cli = resolve(dirname(fileURLToPath(import.meta.url)), 'cli.mjs');const tools = [
   { name: 'publishing_state', description: '读取本地公众号文章状态', inputSchema: { type: 'object', properties: {} } },
   { name: 'publishing_import', description: '导入文章文件和本地图片并自动生成排版结构', inputSchema: { type: 'object', properties: { articlePath: { type: 'string' }, text: { type: 'string' }, images: { type: 'array', items: { type: 'string' } } } } },
+  { name: 'publishing_workflow', description: '运行公众号发布工作流：本地识别、可选自然化、核心提炼、自动排版、公众号审核，并在显式确认时提交草稿箱', inputSchema: { type: 'object', properties: { articlePath: { type: 'string' }, text: { type: 'string' }, images: { type: 'array', items: { type: 'string' } }, generateImages: { type: 'boolean', default: true }, maxGenerated: { type: 'number', default: 3 }, autoFix: { type: 'boolean', default: true }, humanizeMode: { type: 'string', enum: ['off', 'natural', 'conservative'], default: 'off' }, applyHumanize: { type: 'boolean', default: false, description: '自然化后是否确认应用正文修改；false 只生成预览并等待人工确认' }, submit: { type: 'boolean', default: false } } } },
   { name: 'publishing_guidance', description: '读取当前文章的人工排版指导建议', inputSchema: { type: 'object', properties: {} } },
+  { name: 'publishing_auto_format', description: '本地一键优化公众号排版：字体、字号、段落节奏、标题层级、重点色块和手机端适配', inputSchema: { type: 'object', properties: {} } },
   { name: 'publishing_cover', description: '生成公众号头条版/方版封面 SVG 候选，并返回文案与尺寸检查结果；最终封面由人工确认', inputSchema: { type: 'object', properties: { title: { type: 'string' }, formula: { type: 'string', enum: ['number', 'painpoint', 'counter', 'suspense'] }, out: { type: 'string' }, main: { type: 'string' }, sub: { type: 'string' }, audit: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, bg: { type: 'string' }, fg: { type: 'string' }, accent: { type: 'string' } } } },
   { name: 'publishing_cover_set', description: '根据封面与内容摘要设置区优先复用素材库中的合规封面，缺少时生成可替换候选，并同步摘要', inputSchema: { type: 'object', properties: {} } },
   { name: 'publishing_visual_compose', description: '根据文章内容总结摘要、生成爆款标题候选，并把素材或本地创意图自动入库后智能插入章节；结果仍可人工替换、移动或删除', inputSchema: { type: 'object', properties: { generate: { type: 'boolean', default: true }, maxGenerated: { type: 'number', default: 3 }, forceTitle: { type: 'boolean', default: false }, fillUnmatched: { type: 'boolean', default: false, description: '将未语义匹配的素材库图片按章节顺序自动填充' } } } },
@@ -20,6 +22,7 @@ const cli = resolve(dirname(fileURLToPath(import.meta.url)), 'cli.mjs');const to
   { name: 'publishing_draft_submit', description: '经显式确认后提交当前文章到微信公众号草稿箱；未配置凭据时只生成本地草稿包', inputSchema: { type: 'object', required: ['confirm'], properties: { confirm: { type: 'boolean' }, out: { type: 'string' } } } },
   { name: 'publishing_apply_text', description: '应用中文自然语言排版指令', inputSchema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } } },
   { name: 'publishing_humanize', description: '以自然化或保守模式处理文章文字，保留原稿以便回滚', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['natural', 'conservative'] } } } },
+  { name: 'publishing_humanize_stage', description: '预览、确认应用或跳过去 AI 味阶段；预览不会修改正文，应用后生成可回退的新正文版本', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['natural', 'conservative'], default: 'natural' }, apply: { type: 'boolean', default: false }, skip: { type: 'boolean', default: false, description: '保留原文并继续后续阶段' } } } },
   { name: 'publishing_apply_intent', description: '应用结构化公众号排版 Intent', inputSchema: { type: 'object', required: ['intent'], properties: { intent: { type: 'object' } } } },
   { name: 'publishing_export', description: '导出公众号 HTML', inputSchema: { type: 'object', required: ['out'], properties: { out: { type: 'string' } } } },
   { name: 'publishing_publish', description: '仅生成本地微信兼容 HTML、草稿 payload 与 manifest，不产生远程副作用', inputSchema: { type: 'object', properties: { out: { type: 'string' } } } }
@@ -35,7 +38,21 @@ const failure = (id, message) => ({ jsonrpc: '2.0', id, error: { code: -32000, m
     for (const image of input.images || []) args.push('--image', image);
     return JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
   }
+  if (name === 'publishing_workflow') {
+    const args = [cli, 'workflow', ...dataArgs];
+    if (input.articlePath) args.push('--article', input.articlePath);
+    if (input.text !== undefined) args.push('--text', input.text);
+    for (const image of input.images || []) args.push('--image', image);
+    args.push('--generate-images', input.generateImages === false ? 'false' : 'true');
+    args.push('--max-generated', String(input.maxGenerated ?? 3));
+    args.push('--auto-fix', input.autoFix === false ? 'false' : 'true');
+    args.push('--humanize-mode', input.humanizeMode || 'off');
+    if (input.applyHumanize === true) args.push('--apply-humanize', 'true');
+    if (input.submit === true) args.push('--submit', 'true');
+    return JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
+  }
   if (name === 'publishing_guidance') return JSON.parse(execFileSync(process.execPath, [cli, 'guidance', ...dataArgs], { encoding: 'utf8' }));
+  if (name === 'publishing_auto_format') return JSON.parse(execFileSync(process.execPath, [cli, 'format', ...dataArgs], { encoding: 'utf8' }));
   if (name === 'publishing_visual_compose') {
     const args = [cli, input.fillUnmatched === true ? 'assets-fill' : 'visuals', '--generate', input.generate === false ? 'false' : 'true', '--max-generated', String(input.maxGenerated ?? 3), '--force-title', input.forceTitle === true ? 'true' : 'false', ...dataArgs];
     return JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
@@ -65,6 +82,7 @@ const failure = (id, message) => ({ jsonrpc: '2.0', id, error: { code: -32000, m
   }
   if (name === 'publishing_apply_text') return JSON.parse(execFileSync(process.execPath, [cli, 'text', '--text', input.text, ...dataArgs], { encoding: 'utf8' }));
   if (name === 'publishing_humanize') return JSON.parse(execFileSync(process.execPath, [cli, 'humanize', '--mode', input.mode === 'conservative' ? 'conservative' : 'natural', ...dataArgs], { encoding: 'utf8' }));
+  if (name === 'publishing_humanize_stage') return JSON.parse(execFileSync(process.execPath, [cli, 'humanize-stage', '--mode', input.mode === 'conservative' ? 'conservative' : 'natural', '--apply', input.apply === true ? 'true' : 'false', '--skip', input.skip === true ? 'true' : 'false', ...dataArgs], { encoding: 'utf8' }));
   if (name === 'publishing_apply_intent') return JSON.parse(execFileSync(process.execPath, [cli, 'intent', '--json', JSON.stringify(input.intent), ...dataArgs], { encoding: 'utf8' }));
   if (name === 'publishing_export') return JSON.parse(execFileSync(process.execPath, [cli, 'export', '--out', input.out, ...dataArgs], { encoding: 'utf8' }));
   if (name === 'publishing_publish') {
