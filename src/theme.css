@@ -32,18 +32,19 @@
 .wechat-check-note{margin:7px 0 0;font-size:10px;color:var(--theme-accent)}
 .shell.theme-official .panel,.shell.theme-official .topbar,.shell.theme-official .statusbar{color:var(--theme-ink)}
 .shell.theme-official .left-panel{background:linear-gradient(180deg,#171b19,#111413)}
-.shell.theme-official .wechat-article{background:#121413;color:#e8eeeb;border-top-color:var(--theme-accent)}
+.shell.theme-official .wechat-article{background:#121413;color:#e8eeeb;border-top:0}
 .shell.theme-official .wechat-article h1,.shell.theme-official .wechat-article h2,.shell.theme-official .wechat-article h3{color:#edf3f0}
 .shell.theme-official .wechat-article h1{text-align:left}
 .shell.theme-official .wechat-article h2{padding:0 0 9px;border-left:0;border-bottom:1px solid var(--theme-accent);border-radius:0;background:transparent}
-.shell.theme-official .wechat-article h3{padding:0 0 7px;border-left:0;border-bottom:1px solid #3a433e}
-.shell.theme-official .wechat-article p{color:#d7dfda;text-align:left}
+.shell.theme-official .wechat-article h3{padding:0 0 7px;border-left:0;border-bottom:1px solid #3a433e;color:var(--theme-accent)}
+.shell.theme-official .wechat-article p{color:#c7d0ca;text-align:left}
 .shell.theme-official .wechat-article .subtitle,.shell.theme-official .wechat-article .meta,.shell.theme-official .wechat-article figcaption{color:#9da9a3}
 .shell.theme-official .wechat-article blockquote,.shell.theme-official .wechat-article .cta,.shell.theme-official .wechat-article .media{background:#222725;color:#cbd5cf;border-left-color:var(--theme-accent)}
 .shell.theme-official .wechat-article .wechat-summary{background:#222725;color:#aab6af;border-left-color:var(--theme-accent)}
 .shell.theme-official .wechat-article mark.inline-emphasis{background:rgba(25,216,117,.16);color:#64e99b}
 .shell.theme-official .wechat-article strong.inline-emphasis{color:#45e48c}
-.shell.theme-official .wechat-article figure.wechat-image-figure img{border:1px solid #3a433e;background:#0f1210}
+.shell.theme-official .wechat-article figure.wechat-image-figure{margin:32px auto;padding:8px 8px 7px;background:#222725;border:1px solid #3a433e;border-radius:8px;box-sizing:border-box;max-width:100%}
+.shell.theme-official .wechat-article figure.wechat-image-figure img{border:0;background:#0f1210}
 .shell.theme-official .wechat-article .article-hashtags{border-top-color:#3a433e;color:#9da9a3}
 .shell.theme-official .wechat-article .article-hashtags-list span{color:#45e48c}
 .shell.theme-official .wechat-cover-copy{background:#222725}

@@ -285,6 +285,7 @@ test('微信官方深色主题复用官方参考中的深底、绿色锚点和�
     subtitle: '让重点自然浮现',
     blocks: [
       { id: 'section', type: 'heading', level: 2, text: '01 先建立阅读层级' },
+      { id: 'subsection', type: 'heading', level: 3, text: '绿色视觉锚点' },
       { id: 'body', type: 'paragraph', text: '正文只保留必要的阅读信息。', emphasisRanges: [{ start: 0, end: 4, style: 'mark' }] },
       { id: 'image', type: 'image', assetId: 'visual', text: '章节配图', visualRole: 'section' }
     ],
@@ -297,18 +298,20 @@ test('微信官方深色主题复用官方参考中的深底、绿色锚点和�
   const profile = getWechatLayoutProfile(doc);
   const html = renderArticleHtml(doc);
   assert.equal(normalizeTheme('微信官方深色'), 'official');
-  assert.equal(profile.imageMaxWidth, 92);
+  assert.equal(profile.imageMaxWidth, 88);
   assert.equal(profile.titleAlign, 'left');
   assert.match(html, /background:#121413/);
   assert.match(html, /text-align:left/);
-  assert.match(html, /max-width:92%;height:auto/);
+  assert.match(html, /max-width:88%;height:auto/);
+  assert.match(html, /background:#222725;border:1px solid #3a433e;border-radius:8px/);
+  assert.match(html, /<h3 style="[^"]*color:#19d875/);
   assert.match(html, /rgba\(25,216,117,.16\)/);
   assert.match(html, /border-bottom:1px solid #19d875/);
 
   const previouslyFormatted = autoFormatDocument({ ...doc, theme: 'minimal' }).doc;
   const switched = autoFormatDocument({ ...previouslyFormatted, theme: 'official' }).doc;
   assert.equal(switched.meta.layoutProfile.themeId, 'official');
-  assert.equal(switched.meta.layoutProfile.imageMaxWidth, 92);
+  assert.equal(switched.meta.layoutProfile.imageMaxWidth, 88);
   assert.equal(switched.meta.layoutProfile.titleAlign, 'left');
 });
 

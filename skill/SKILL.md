@@ -3,7 +3,7 @@ name: wechat-layout
 description: Run a local-first Chinese WeChat Official Account publishing workflow with DOCX/PDF text extraction, special-marker cleanup, optional humanization, content distillation, deterministic layout, reference-derived visual systems, WeChat review, explicit draft submission, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、内容提炼、去 AI 味、发布审核、图片插入、视觉主题或本地预览。
 ---
 
-# 公众号排版 Skill — v0.4.1
+# 公众号排版 Skill — v0.4.2
 
 ## Purpose
 
@@ -96,7 +96,7 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 
 ## Natural-language examples
 
-主题目录包含六套：极简、杂志、清新、墨韵、暖阳、微信官方深色。切换主题会同步刷新工作区容器、编辑区、工具栏和右侧预览；“微信官方深色”来自参考截图的视觉规律提炼，不复制其文章内容或品牌素材。完整规则见 `docs/visual-system.md`。
+主题目录包含六套：极简、杂志、清新、墨韵、暖阳、微信官方深色。切换主题会同步刷新工作区容器、编辑区、工具栏和右侧预览；“微信官方深色”来自参考截图和公开功能说明的视觉规律提炼，默认采用 15px 正文、2.02 倍行距、绿色章节锚点、三级标题绿色文字和 88% 居中深色图片卡片，不复制参考文章内容或品牌素材。完整规则见 `docs/visual-system.md`。
 
 公众号预览固定保留封面图位置和内容摘要位置：已有首图作为封面，缺图时显示待补位提示；封面文案与摘要来自文档状态，优化后会同步刷新，不直接修改原稿。
 

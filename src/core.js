@@ -21,9 +21,11 @@ export const THEMES = Object.freeze({
     line: '#3a433e',
     heading: 'system-ui,"PingFang SC","Microsoft YaHei",sans-serif',
     articleBackground: '#121413',
-    imageMaxWidth: 92,
+    bodyInk: '#c7d0ca',
+    imageMaxWidth: 88,
     imageRadius: 5,
     titleAlign: 'left',
+    layout: { bodyFontSize: 15, bodyLineHeight: 2.02, paragraphGap: 17, headingGap: 34, quoteGap: 24 },
     dark: true
   }
 });
@@ -74,7 +76,7 @@ export function humanizeDocument(doc, mode = 'natural') {
 }
 
 export const WECHAT_LAYOUT_PROFILE = Object.freeze({
-  version: 2,
+  version: 3,
   bodyFontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans CJK SC',sans-serif",
   bodyFontSize: 16,
   bodyLineHeight: 1.95,
@@ -90,6 +92,7 @@ function clampLayoutNumber(value, minimum, maximum, fallback) {
 
 export function getWechatLayoutProfile(doc = {}) {
   const theme = THEMES[normalizeTheme(doc.theme)];
+  const themeLayout = theme.layout || {};
   const storedProfile = doc.meta?.layoutProfile || {};
   const stored = storedProfile.themeId === theme.id ? storedProfile : {};
   return {
@@ -97,11 +100,11 @@ export function getWechatLayoutProfile(doc = {}) {
     themeId: theme.id,
     bodyFontFamily: WECHAT_LAYOUT_PROFILE.bodyFontFamily,
     headingFontFamily: String(stored.headingFontFamily || theme.heading).replace(/"/g, "'"),
-    bodyFontSize: clampLayoutNumber(stored.bodyFontSize, 15, 18, WECHAT_LAYOUT_PROFILE.bodyFontSize),
-    bodyLineHeight: clampLayoutNumber(stored.bodyLineHeight, 1.7, 2.2, WECHAT_LAYOUT_PROFILE.bodyLineHeight),
-    paragraphGap: clampLayoutNumber(stored.paragraphGap, 12, 28, WECHAT_LAYOUT_PROFILE.paragraphGap),
-    headingGap: clampLayoutNumber(stored.headingGap, 24, 40, WECHAT_LAYOUT_PROFILE.headingGap),
-    quoteGap: clampLayoutNumber(stored.quoteGap, 16, 30, WECHAT_LAYOUT_PROFILE.quoteGap),
+    bodyFontSize: clampLayoutNumber(stored.bodyFontSize, 15, 18, themeLayout.bodyFontSize ?? WECHAT_LAYOUT_PROFILE.bodyFontSize),
+    bodyLineHeight: clampLayoutNumber(stored.bodyLineHeight, 1.7, 2.2, themeLayout.bodyLineHeight ?? WECHAT_LAYOUT_PROFILE.bodyLineHeight),
+    paragraphGap: clampLayoutNumber(stored.paragraphGap, 12, 28, themeLayout.paragraphGap ?? WECHAT_LAYOUT_PROFILE.paragraphGap),
+    headingGap: clampLayoutNumber(stored.headingGap, 24, 40, themeLayout.headingGap ?? WECHAT_LAYOUT_PROFILE.headingGap),
+    quoteGap: clampLayoutNumber(stored.quoteGap, 16, 30, themeLayout.quoteGap ?? WECHAT_LAYOUT_PROFILE.quoteGap),
     paragraphAlign: stored.paragraphAlign === 'justify' ? 'justify' : 'left',
     titleAlign: stored.titleAlign === 'left' || stored.titleAlign === 'right' ? stored.titleAlign : (theme.titleAlign || 'center'),
     imageMaxWidth: clampLayoutNumber(stored.imageMaxWidth, 70, 100, theme.imageMaxWidth || 100),
@@ -1471,6 +1474,7 @@ export function renderArticleHtml(doc) {
   const articleBackground = theme.articleBackground || (theme.surface === '#f5f7f8' ? '#fff' : theme.surface);
   const softSurface = theme.soft || theme.surface;
   const mutedInk = theme.muted || '#75808b';
+  const bodyInk = theme.bodyInk || theme.ink;
   const themeLine = theme.line || '#dfe7ee';
   const imageMaxWidth = `${layout.imageMaxWidth}%`;
   const headingDecoration = theme.dark
@@ -1485,15 +1489,17 @@ export function renderArticleHtml(doc) {
     subtitle: `color:${mutedInk};margin:0 0 6px;text-align:${layout.titleAlign};line-height:1.7;`,
     meta: `font-size:12px;color:${mutedInk};margin-bottom:26px;text-align:${layout.titleAlign};line-height:1.5;`,
     heading: `font-family:${layout.headingFontFamily};font-size:20px;line-height:1.5;margin:${layout.headingGap}px 0 13px;color:${theme.ink};${headingDecoration}`,
-    subheading: `font-family:${layout.headingFontFamily};font-size:18px;line-height:1.5;margin:24px 0 11px;color:${theme.ink};${subheadingDecoration}`,
-    paragraph: `font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};text-align:${layout.paragraphAlign};white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;margin:${layout.paragraphGap}px 0;color:${theme.ink};`,
+    subheading: `font-family:${layout.headingFontFamily};font-size:18px;line-height:1.5;margin:24px 0 11px;color:${theme.dark ? theme.accent : theme.ink};${subheadingDecoration}`,
+    paragraph: `font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};text-align:${layout.paragraphAlign};white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;margin:${layout.paragraphGap}px 0;color:${bodyInk};`,
     inlineMark: theme.dark
       ? `background:rgba(25,216,117,.16);color:${theme.accent};font-weight:700;padding:0 .18em;border-radius:3px;`
       : `background:#fff1cf;color:${theme.ink};font-weight:700;padding:0 .18em;border-radius:3px;`,
     inlineStrong: `font-weight:700;color:${theme.dark ? theme.accent : theme.ink};`,
     quote: `margin:${layout.quoteGap}px 0;padding:15px 17px;background:${softSurface};border-left:4px solid ${theme.accent};color:${mutedInk};line-height:1.85;`,
-    imageFigure: 'margin:24px 0;text-align:center;',
-    image: `width:100%;max-width:${imageMaxWidth};height:auto;display:block;margin:0 auto;border-radius:${layout.imageRadius}px;vertical-align:top;${theme.dark ? `border:1px solid ${themeLine};background:${theme.articleBackground};` : ''}`,
+    imageFigure: theme.dark
+      ? `margin:32px auto;text-align:center;padding:8px 8px 7px;background:${softSurface};border:1px solid ${themeLine};border-radius:8px;box-sizing:border-box;max-width:100%;`
+      : 'margin:24px 0;text-align:center;',
+    image: `width:100%;max-width:${imageMaxWidth};height:auto;display:block;margin:0 auto;border-radius:${layout.imageRadius}px;vertical-align:top;${theme.dark ? `border:0;background:${theme.articleBackground};` : ''}`,
     caption: `display:block;text-align:center;color:${mutedInk};font-size:12px;line-height:1.5;margin:8px 8px 0;overflow-wrap:anywhere;`,
     coverFigure: 'margin:-24px -20px 24px;text-align:center;',
     coverImage: 'width:100%;max-width:100%;height:auto;display:block;vertical-align:top;',

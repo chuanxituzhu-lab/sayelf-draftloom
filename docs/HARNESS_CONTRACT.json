@@ -1,6 +1,6 @@
 {
   "name": "wechat-layout-harness",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "state_model": "single-document-source-of-truth-with-optional-humanize-six-stage-workflow",
   "view_state_excluded": ["previewZoom", "selection"],
   "events": ["wechat-layout:changed"],  "methods": ["getState", "getWorkflowState", "applyText", "applyIntent", "importArticle", "humanizePreview", "humanizeApply", "humanizeSkip", "publishingWorkflow", "autoFormat", "getLayoutGuidance", "addImage", "selectBlock", "undo", "redo"],
