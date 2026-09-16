@@ -50,11 +50,11 @@ $env:PORT="4177"; npm start
 
 ## 最新版本下载
 
-当前本地工作版本：**v0.4.5**；GitHub 最新公开版本：**v0.4.2**（本次更新发布后同步为 v0.4.5）
+当前本地工作版本：**v0.4.5**；GitHub 最新公开版本：**v0.4.5**
 
 - [打开 GitHub 仓库](https://github.com/chuanxituzhu-lab/sayelf-draftloom)
-- [下载 v0.4.2 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.2.zip)
-- [查看 v0.4.2 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.2/skill/SKILL.md)
+- [下载 v0.4.5 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.5.zip)
+- [查看 v0.4.5 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.5/skill/SKILL.md)
 
 源码 ZIP 已包含最新 Skill、WebUI、命令行工具和本地工作流；本地独立导出包仍保存在 `.local-data/exports/`，不上传到公开仓库。
 
