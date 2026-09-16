@@ -22,9 +22,17 @@ test('publishing stages keep their responsibilities separate', () => {
   assert.equal(recognized.doc.meta.visualPlan, undefined);
   assert.equal(recognized.doc.assets.length, 0);
 
+  const bodyBeforeDistill = structuredClone(recognized.doc.blocks);
   const distilled = distillArticleStage(recognized.doc);
   assert.equal(getWorkflowState(distilled.doc).stages.distill.status, 'complete');
   assert.ok(distilled.doc.meta.contentAnalysis.coreContent.summary);
+  assert.equal(distilled.doc.meta.contentAnalysis.coreContent.type, 'CoreContent');
+  assert.equal(distilled.doc.meta.contentAnalysis.coreContent.epistemic, 'inference');
+  assert.equal(distilled.doc.meta.contentAnalysis.coreValidation.ok, true);
+  assert.equal(distilled.doc.meta.contentAnalysis.metadata.bodyRewritten, false);
+  assert.equal(distilled.doc.meta.contentAnalysis.metadata.requiresReview, true);
+  assert.equal(distilled.doc.meta.contentAnalysis.metadata.localOnly, true);
+  assert.deepEqual(distilled.doc.blocks, bodyBeforeDistill);
   assert.equal(distilled.report.bodyRewritten, false);
   assert.ok(distilled.report.titleCandidates.length >= 1);
 

@@ -6,7 +6,7 @@ agent_created: true
 
 # 公众号自动排版（sayelf-draftloom）
 
-基于 draftloom（本地优先的公众号文章工作流与排版工具，v0.4.2）实现文字稿件到微信草稿的可回退流水线。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。DOCX/PDF 由本地解析器提取文字，导入前自动清理 `*`、`#`、反引号等标记；扫描版 PDF 暂不做 OCR。
+基于 draftloom（本地优先的公众号文章工作流与排版工具，v0.4.5）实现文字稿件到微信草稿的可回退流水线。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。DOCX 在本机优先调用 Microsoft 开源 MarkItDown，未安装时回退到 Mammoth + MIT Turndown；PDF/TXT 也统一进入本地 Markdown 中间稿，导入前自动清理 `*`、`#`、反引号等标记；扫描版 PDF 暂不做 OCR。WebUI 预留共享 GSAP Motion Layer，动效按需直接调用，不新增独立 Skill。
 
 ## 安装（WorkBuddy）
 
@@ -14,7 +14,7 @@ agent_created: true
 git clone https://github.com/chuanxituzhu-lab/sayelf-draftloom.git ~/.workbuddy/skills/sayelf-draftloom
 ```
 
-运行 `npm install` 安装本地 DOCX/PDF 解析器。校验安装：在技能目录运行 `npm test`（当前应 84 个测试全部通过）。
+运行 `npm install` 安装本地 DOCX/PDF 解析器、Markdown 转换器及共享 GSAP 动效依赖。校验安装：在技能目录运行 `npm test`（当前应 89 个测试全部通过）。
 
 ## 何时使用
 
@@ -24,9 +24,10 @@ git clone https://github.com/chuanxituzhu-lab/sayelf-draftloom.git ~/.workbuddy/
 - 自动局部重点标注：识别重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号，只对对应文字加粗或加浅色标记
 - 一键优化公众号排版：本地统一中文字体栈、字号、行距、段距和标题层级；拆分过长段落，只对重点词、金句和编号做局部加粗或色块标注；可切换“微信官方深色”视觉系统，使用绿色章节锚点、克制正文和居中留边的深色图片卡片
 - 一键提炼核心内容并在本机生成一张 900×383 标题图片，文案可继续人工修改
-- 发布工作流：识别文字 → 去 AI 味（可选）→ 提炼核心/标题/概要 → 自动排版 → 审核微信规则 → 显式确认后提交草稿箱；点击 WebUI“一键执行1-4”可一次完成前四阶段，提交仍需人工确认
+- 发布工作流：识别文字 → 去 AI 味（可选）→ 提炼 `CoreContent v1`/标题/概要 → 自动排版 → 审核微信规则 → 显式确认后提交草稿箱；点击 WebUI“一键执行1-4”可一次完成前四阶段，提交仍需人工确认
 - 导出微信兼容 HTML 或生成本地交付包
 - 去除文本 AI 味、切换文章主题
+- 需要界面动效时直接复用共享 `Motion Layer`，不重复设计动效底座
 
 ## 使用方式
 
@@ -65,6 +66,10 @@ npm start   # 浏览器打开 http://127.0.0.1:4173
 
 页面提供左右分栏编辑与微信实时预览，支持 Markdown/TXT/DOCX/PDF + 多图片拖放导入；DOCX/PDF 仅在本机识别，原稿保留用于回滚。换稿前会自动保存当前文章，也可以在“文章记录”中手动保存、打开或删除最近 12 篇文章。
 
+### 本地 Markdown 中间稿
+
+导入文件时按扩展名自动选择转换器，不需要用户二次点击：`.docx` 优先调用 Microsoft 开源 MarkItDown 的本地流式转换，未检测到 Python/MarkItDown 时回退到 Mammoth 提取语义 HTML、Turndown 转 Markdown；`.pdf` 由本机 PDF 解析器提取文字后转为规范化 Markdown；`.md`/`.txt` 直接经过本地 Markdown 规范化。转换失败会停在识别阶段并提示原因，不会覆盖当前已接受正文，也不会把文件发送到网络。
+
 ### MCP
 
 `npm run mcp` 启动 JSON-RPC stdio 服务，提供 `publishing_import`、`publishing_workflow`、`publishing_humanize_stage`、`publishing_auto_format`、`publishing_guidance`、`publishing_state`、`publishing_apply_text`、`publishing_humanize`、`publishing_apply_intent`、`publishing_export`、`publishing_publish` 工具。
@@ -91,11 +96,19 @@ npm start   # 浏览器打开 http://127.0.0.1:4173
 ## 核心规则
 
 - Document State 是唯一内容事实源；所有内容变更经由 Intent → Reducer → VersionStore，自动写入 `revision + updatedAt`。
+- Markdown 是跨格式排版的本地中间稿：DOCX/PDF/TXT 导入自动先完成转换，再进入结构识别；排版器只消费已接受的 Markdown/Document State，原始输入边界和版本记录用于回退。
 - 缩放等视图状态不得写入 Document State。
 - 最多 50 个编辑版本，支持 Undo/Redo。
+- `distillArticleStage` 输出 `CoreContent v1`：`thesis/topic/problem/method/conclusion/keywords/keySentences`，并固定标记 `epistemic: inference`、`localOnly: true`；`keySentences` 保留正文原句、类型和位置，原文未明确表达的问题/方法/结论保持 `null`。
+- 标题/摘要使用独立元数据记录 `titleSource`、`digestSource`、`contentSource`、`bodyRewritten`、`requiresReview` 和 `localOnly`；提炼只读当前已接受正文，不把 CoreContent 当第二篇文章，不静默改写正文。
+- CoreContent 交给排版前必须通过 `validateCoreContent`；失败时停在本地提炼边界，不把不完整结果交给下游。未来 AI Harness 只能作为显式、可替换适配器，必须返回相同 schema，仍需本机校验和人工复核。
 - `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})` 会按正文篇幅与章节密度自动计算正文配图预算，再将本地素材或创意图放到分布均匀的章节位置；`fillUnmatched:true` 也遵守预算，不会把素材库图片无上限追加到文章。
 - `autoFormatDocument(doc)` 是本地确定性排版核心：统一安全字体栈、字号、行距、段距和标题层级；将过长段落按句子边界拆分；仅保留识别到的重点、金句和编号局部标注。选择“微信官方深色”时，正文默认 15px/2.02 倍行距，二级标题使用绿色锚线，三级标题使用绿色文字，正文图片使用 88% 最大宽度的深色图片卡片。规则不会改写原稿语义，Document State 经过 VersionStore 后支持回滚。
-- `runPublishingWorkflow(input, options)` 是工作流编排核心：`recognizeArticleStage` 只识别并结构化，`humanizeArticleStage` 是可选的“预览→人工确认→应用”正文节点，`distillArticleStage` 只生成核心/标题/概要/关键词，`layoutArticleStage` 负责排版与图片位置，`reviewArticleStage` 负责微信规则审核与安全修正，`prepareWorkflowSubmission` 只准备草稿 payload。每阶段报告写入 `meta.workflow`，阶段契约、检查点和本地证据记录在同一文档状态中，上游重跑会把下游标记为 `stale`。
+- `runPublishingWorkflow(input, options)` 是工作流编排核心：`recognizeArticleStage` 只识别并结构化，`humanizeArticleStage` 是可选的“预览→人工确认→应用”正文节点，`distillArticleStage` 生成 CoreContent v1/标题/概要/关键词及校验元数据，`layoutArticleStage` 负责排版与图片位置，`reviewArticleStage` 负责微信规则审核与安全修正，`prepareWorkflowSubmission` 只准备草稿 payload。每阶段报告写入 `meta.workflow`，阶段契约、检查点和本地证据记录在同一文档状态中，上游重跑会把下游标记为 `stale`。
 - 工作流默认在本机执行，去 AI 味预览不修改正文，应用后通过 VersionStore 产生新版本并要求下游重新验收；提炼不静默改写正文，审核保留错误与人工建议；`submit` 只是显式确认后的最后动作，远程授权和上传仍隔离在现有提交适配器中。
 - “自动排版指导”支持“一键生成”：一次完成标题/配图编排，并在本机按章节层级、图片位置/内容、爆款标题和综合建议分组生成指导；每条结果保留“带入指令”作人工微调，不会未经确认直接改写正文。
 - `publish` 默认只生成本地交付包，不上传。仅当显式配置 `WECHAT_ACCESS_TOKEN`（或 `WECHAT_APP_ID` + `WECHAT_APP_SECRET`）后才提交远程草稿；提交微信前，本机会把文章使用的 SVG 图片转换为 PNG 上传，编辑器中的原始 SVG 不变；Token 不写入文档或输出。扫码授权需要真实的授权适配器；配置 `WECHAT_QR_AUTH_URL` 后二维码由本机自动生成，配置 `WECHAT_QR_IMAGE_URL` 时直接显示已有二维码，本机回调只接收适配器提交的凭据，微信官方草稿接口本身不提供扫码登录。
+
+## 共享动效能力
+
+WebUI 默认注册 `window.draftloomMotion`，由 `src/motion.js` 统一提供 GSAP 的 `from`、`to`、`fromTo`、`set`、`timeline` 和 `add`。GSAP 是共享能力，不是新的 Skill；需要动效时直接调用该入口，不在各功能内重复设计动效底座。动效只属于视图层，默认不自动播放，尊重 `prefers-reduced-motion`，并支持 `revert()` / `kill()` 清理，不写入 Document State 或微信 HTML。

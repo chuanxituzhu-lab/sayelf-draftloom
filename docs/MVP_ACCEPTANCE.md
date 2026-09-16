@@ -1,4 +1,4 @@
-# MVP v0.1 Acceptance
+# MVP v0.4.5 Acceptance
 
 | 项目 | 状态 | 验收方式 |
 |---|---|---|
@@ -9,10 +9,14 @@
 | Harness 新图片进入素材库 | PASS | `addImage()` |
 | 图片插入文章 | PASS | `insertAsset` / 点击素材 |
 | 文章 + 图片批量导入 | PASS | Markdown/TXT 拖放或 CLI `import` |
+| Microsoft 格式 Markdown 中间稿 | PASS | DOCX 优先经 Microsoft MarkItDown 转为 Markdown，不可用时回退 Mammoth→Turndown；PDF/TXT 统一规范化后再进入排版 |
 | 自动结构识别 | PASS | 标题、章节、段落、引用、列表、表格、CTA/画廊/媒体 fenced block |
 | 自动排版指导 | PASS | 长段落、缺少层级、未匹配图片提示 |
 | 自然语言指导编辑 | PASS | 区块转换、段落拆分、主题与组件指令 |
 | Humanizer | PASS | 自然化 / 保守调整先预览，确认后生成新正文版本，原稿可回滚 |
+| CoreContent v1 提炼契约 | PASS | 输出主题、问题、方法、结论、关键词、证据句及 `epistemic/localOnly` 标记；正文不被改写 |
+| CoreContent 交接校验 | PASS | `validateCoreContent` 失败时停在提炼阶段，不把不完整结果交给排版 |
+| 提炼证据可回看 | PASS | WebUI 字段摘要默认展示，关键证据句折叠展示原句与位置类型 |
 | MVP 主题 | PASS | 极简、杂志、清新、墨韵、暖阳；切换时工作区与预览同步换肤 |
 | 一键检测 | PASS | 统一检查微信公众号字段、正文、封面和排版建议，并自动修正可安全修正项 |
 | 封面候选生成 | PASS | CLI/MCP 生成 900×383 头条版与 383×383 方版 SVG，并返回人工审核文案候选 |
@@ -36,7 +40,7 @@
 | 本机授权持久化 | PASS | 适配器 POST `/api/wechat/auth/callback` 后写入 `.local-data/wechat-auth.json`，重启自动复用 |
 | 授权后自动创建草稿 | PASS | GUI 确认“授权后自动上传草稿”后，授权状态变为成功即调用图片上传与 `draft/add` |
 | 人工审核边界 | PASS | 返回 `draftId` 与 `reviewRequired`，不自动群发 |
-| 自动测试 | PASS | Node test 29/29 |
+| 自动测试 | PASS | Node test 89/89 |
 
 ## Frozen outside v0.1
 云同步、多人协作、账号体系、复杂富文本样式模板市场、DOCX 解析，以及视频/音频/永久素材库管理。

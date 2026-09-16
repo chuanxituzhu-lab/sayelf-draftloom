@@ -15,7 +15,16 @@ const STOP_WORDS = new Set([
   '图片', '图像', '素材', '章节', '部分', '第一', '第二', '自动', '填充', '以后', '为什么', '很多人', '这一点', '别人', '还是',
   'with', 'from', 'that', 'this', 'the', 'and', 'for', 'are', 'you', 'your'
 ]);
-const CORE_SIGNAL_TERMS = Object.freeze(['本质', '核心', '关键', '重要', '所以', '因此', '真正', '价值', '方法', '执行', '意味着', '结论', '不是', 'AI']);
+const CORE_SIGNAL_TERMS = Object.freeze([
+  '本质', '核心', '关键', '重要', '所以', '因此', '真正', '价值', '方法', '执行', '意味着', '结论', '不是', 'AI',
+  '问题', '痛点', '困境', '难点', '限制', '误区', '步骤', '建议', '通过', '采用', '决定', '才能', '总结'
+]);
+const CORE_CONTENT_TYPES = Object.freeze(['TOPIC', 'PROBLEM', 'METHOD', 'CONCLUSION']);
+const CORE_TYPE_TERMS = Object.freeze({
+  PROBLEM: Object.freeze(['问题', '痛点', '困境', '难点', '限制', '误区', '不足', '缺少', '挑战', '风险', '难以', '无法', '为何', '为什么']),
+  METHOD: Object.freeze(['方法', '步骤', '建议', '做法', '通过', '采用', '流程', '策略', '路径', '实践', '执行', '先', '再', '最后']),
+  CONCLUSION: Object.freeze(['因此', '所以', '最终', '意味着', '结论', '本质', '关键', '真正', '价值', '决定', '才能', '只有', '不是', '而是', '总结', '说明'])
+});
 
 const PALETTES = Object.freeze({
   minimal: { bg: '#eef6f2', ink: '#153b2e', accent: '#1f9d72', soft: '#a9dfc7' },
@@ -59,6 +68,73 @@ export function extractKeywords(text = '', max = 8) {
     .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length || a[0].localeCompare(b[0]))
     .slice(0, max)
     .map(([word]) => word);
+}
+function coreSentenceType(sentence = '') {
+  const value = clean(sentence);
+  if (!value) return 'TOPIC';
+  if (/[？?]/.test(value) || CORE_TYPE_TERMS.PROBLEM.some(term => value.includes(term))) return 'PROBLEM';
+  if (CORE_TYPE_TERMS.METHOD.some(term => value.includes(term))) return 'METHOD';
+  if (CORE_TYPE_TERMS.CONCLUSION.some(term => value.includes(term))) return 'CONCLUSION';
+  return 'TOPIC';
+}
+function nullableSentence(value) {
+  const sentence = clean(value);
+  return sentence || null;
+}
+function normalizeKeySentence(item = {}, index = 0) {
+  const sentence = clean(item.sentence || item.text || '');
+  if (!sentence) return null;
+  const type = CORE_CONTENT_TYPES.includes(item.type) ? item.type : coreSentenceType(sentence);
+  const position = Number.isInteger(item.index) ? item.index : index;
+  return { type, sentence, index: Math.max(0, position) };
+}
+
+/** Normalizes the local CoreContent contract for deterministic and future harness output. */
+export function normalizeCoreContent(value = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const keySentences = (Array.isArray(source.keySentences) ? source.keySentences : [])
+    .map(normalizeKeySentence)
+    .filter(Boolean);
+  const points = (Array.isArray(source.points) ? source.points : keySentences.map(item => item.sentence))
+    .map(clean)
+    .filter(Boolean);
+  return {
+    type: 'CoreContent',
+    version: 1,
+    source: clean(source.source) || 'local-deterministic',
+    epistemic: 'inference',
+    localOnly: true,
+    thesis: clean(source.thesis),
+    topic: clean(source.topic),
+    problem: nullableSentence(source.problem),
+    method: nullableSentence(source.method),
+    conclusion: nullableSentence(source.conclusion),
+    keywords: [...new Set((Array.isArray(source.keywords) ? source.keywords : []).map(clean).filter(Boolean))].slice(0, 8),
+    keySentences,
+    summary: clean(source.summary),
+    points,
+    generatedAt: clean(source.generatedAt) || new Date().toISOString()
+  };
+}
+
+/** Validates the handoff boundary without treating local inference as verified fact. */
+export function validateCoreContent(core = {}) {
+  const errors = [];
+  if (core?.type !== 'CoreContent') errors.push('type 必须为 CoreContent');
+  if (core?.version !== 1) errors.push('version 必须为 1');
+  if (!clean(core?.source)) errors.push('缺少提炼来源');
+  if (core?.epistemic !== 'inference') errors.push('epistemic 必须为 inference');
+  if (core?.localOnly !== true) errors.push('localOnly 必须为 true');
+  if (!clean(core?.thesis)) errors.push('缺少 thesis 核心观点');
+  if (!clean(core?.topic)) errors.push('缺少 topic 主题');
+  if (!Array.isArray(core?.keywords)) errors.push('keywords 必须为数组');
+  if (!Array.isArray(core?.keySentences) || core.keySentences.length < 1) errors.push('至少需要一条 keySentences 证据句');
+  for (const item of core?.keySentences || []) {
+    if (!CORE_CONTENT_TYPES.includes(item?.type)) errors.push('keySentences 存在未知类型');
+    if (!clean(item?.sentence)) errors.push('keySentences 存在空句子');
+    if (!Number.isInteger(item?.index) || item.index < 0) errors.push('keySentences index 必须为非负整数');
+  }
+  return { ok: errors.length === 0, errors, bodyRewritten: false, requiresReview: true, localOnly: core?.localOnly === true };
 }
 
 function normalizeHashtag(value = '') {
@@ -227,23 +303,38 @@ export function extractCoreContent({ text = '', title = '', max = 88, maxPoints 
   const currentTitle = clean(title);
   const body = currentTitle && source.startsWith(currentTitle) ? source.slice(currentTitle.length).trim() : source;
   const sentences = body.split(/(?<=[。！？!?；;])\s*/).map(clean).filter(item => item.length >= 8);
-  const ranked = sentences.map((sentence, index) => ({
+  const classified = sentences.map((sentence, index) => ({
     sentence,
     index,
+    type: coreSentenceType(sentence),
     score: CORE_SIGNAL_TERMS.reduce((score, term) => score + (sentence.includes(term) ? 1 : 0), 0) + (index === 0 ? 0.35 : 0)
-  })).sort((a, b) => b.score - a.score || a.index - b.index);
+  }));
+  const ranked = [...classified].sort((a, b) => b.score - a.score || a.index - b.index);
   const selected = (ranked.length ? ranked : [{ sentence: clean(title) || source, index: 0, score: 0 }])
     .slice(0, Math.max(1, Math.min(5, Number(maxPoints) || 3)))
     .sort((a, b) => a.index - b.index)
     .filter(item => item.sentence);
   const fallback = currentTitle || body;
-  return {
-    summary: truncate(selected.slice(0, 2).map(item => item.sentence).join(' ') || fallback || '围绕文章主题提炼一个清晰、可读、值得继续阅读的观点。', max),
-    points: selected.map(item => truncate(item.sentence, 54)),
+  const evidence = selected.map((item, index) => normalizeKeySentence(item, index));
+  const allEvidence = classified.map((item, index) => normalizeKeySentence(item, index));
+  if (!evidence.length) evidence.push(normalizeKeySentence({ sentence: fallback || '围绕文章主题提炼一个清晰、可读、值得继续阅读的观点。', index: 0 }, 0));
+  const firstOfType = type => allEvidence.find(item => item?.type === type) || evidence.find(item => item?.type === type) || null;
+  const topicEvidence = firstOfType('TOPIC') || allEvidence[0] || evidence[0];
+  const thesisEvidence = firstOfType('CONCLUSION') || firstOfType('METHOD') || topicEvidence || evidence[0];
+  const summary = truncate(evidence.slice(0, 2).map(item => item.sentence).join(' ') || fallback || '围绕文章主题提炼一个清晰、可读、值得继续阅读的观点。', max);
+  return normalizeCoreContent({
+    thesis: thesisEvidence?.sentence || summary,
+    topic: topicEvidence?.sentence || thesisEvidence?.sentence || summary,
+    problem: firstOfType('PROBLEM')?.sentence,
+    method: firstOfType('METHOD')?.sentence,
+    conclusion: firstOfType('CONCLUSION')?.sentence,
     keywords: extractKeywords(body, 6),
+    keySentences: evidence,
+    summary,
+    points: evidence.map(item => truncate(item.sentence, 54)),
     source: 'local-deterministic',
     generatedAt: new Date().toISOString()
-  };
+  });
 }
 
 /** Returns a short, deterministic summary that can be shown before a title is applied. */

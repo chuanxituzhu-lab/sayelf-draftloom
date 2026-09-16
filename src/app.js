@@ -2,10 +2,11 @@ import { createInitialDocument, parseCommand, reduceDocument, VersionStore, getL
 import { analyzeGrowth, getDefaultGrowthProfile, growthBrief, normalizeGrowthProfile } from './growth.js';
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, formatBytes } from './wechat-limits.js';
 import { APP_VERSION } from './version.js';
-import { applyArticleEmphasis, getArticleFileKind, isSupportedArticleFile } from './document-import.js';
+import { applyArticleEmphasis, getArticleFileKind, isSupportedArticleFile, normalizeArticleMarkdown } from './document-import.js';
 import { MAX_ARTICLE_HISTORY, removeArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from './article-history.js';
 import { evaluateHotTopicFit } from './visuals.js';
 import { getWorkflowState, humanizeArticleStage, recordWorkflowSubmission, runPublishingWorkflow, skipHumanizeArticleStage } from './workflow.js';
+import { createMotionLayer } from './motion.js';
 
 const STORAGE_KEY = 'wechat-layout-mvp:v0.1';
 const ASSET_LIBRARY_KEY = 'wechat-layout-mvp:asset-library:v0.1';
@@ -259,12 +260,25 @@ function growthBriefText(brief) {
   ].join('\n');
 }
 
+function renderCoreContent(core = {}) {
+  if (!core?.summary) return '';
+  const fields = [
+    ['主题', 'topic'],
+    ['问题', 'problem'],
+    ['方法', 'method'],
+    ['结论', 'conclusion']
+  ].map(([label, key]) => `<div class="core-content-field ${core[key] ? '' : 'is-empty'}"><b>${label}</b><span>${esc(core[key] || '正文未明确表达')}</span></div>`).join('');
+  const evidence = (core.keySentences || []).slice(0, 5).map(item => `<li><b>${esc(item.type || 'TOPIC')}</b><span>${esc(item.sentence || '')}</span></li>`).join('');
+  const evidenceMarkup = evidence ? `<details class="core-content-evidence"><summary>查看关键证据（${core.keySentences.length} 条）</summary><ol>${evidence}</ol></details>` : '';
+  return `<div class="core-content-meta">CoreContent v1 · 本地推断 · 需人工复核</div><div class="core-content-fields">${fields}</div>${evidenceMarkup}`;
+}
+
 function renderTitlePlan() {
   const plan = doc.meta?.titlePlan;
   const core = doc.meta?.visualPlan?.coreContent;
   const budget = doc.meta?.visualPlan?.imageBudget;
   const budgetMarkup = budget?.bodyImages !== undefined ? `<small>智能配图计划：正文 ${budget.bodyImages} 张${budget.currentBodyImages ? `，已有 ${budget.currentBodyImages} 张` : ''}，含封面共 ${budget.totalImages} 张</small>` : '';
-  const coreMarkup = core?.summary ? `<div class="title-ai-core"><b>核心提炼</b><span>${esc(core.summary)}</span>${core.points?.length ? `<small>${esc(core.points.slice(0, 3).join('；'))}</small>` : ''}${budgetMarkup}</div>` : budgetMarkup;
+  const coreMarkup = core?.summary ? `<div class="title-ai-core"><b>核心提炼</b><span>${esc(core.summary)}</span>${core.points?.length ? `<small>${esc(core.points.slice(0, 3).join('；'))}</small>` : ''}${renderCoreContent(core)}${budgetMarkup}</div>` : budgetMarkup;
   if (!plan?.candidates?.length) return coreMarkup || '<div class="title-ai-empty">导入文章或点击“智能配图与标题”，自动总结内容并生成爆款标题候选。</div>';
   const candidates = plan.candidates.map((item, index) => `<button type="button" class="title-candidate ${item.title === doc.title ? 'active' : ''}" data-title-candidate="${esc(item.title)}"><b>${index + 1}</b><span>${esc(item.title)}</span><small>${esc(item.rationale || '内容钩子')}</small></button>`).join('');
   return `${coreMarkup}<div class="title-ai-summary"><b>标题分析摘要（参考）</b><span>${esc(plan.summary || '')}</span></div><div class="title-ai-candidates">${candidates}</div><small class="title-ai-note">${esc(plan.note || '标题仅基于文章内容生成，发布前请人工核对。')}</small>`;
@@ -534,7 +548,7 @@ function render() {
   document.querySelector('#app').innerHTML = `
   <div class="shell theme-${normalizeTheme(doc.theme)}">
     <header class="topbar">
-      <div><strong>公众号排版</strong><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
+      <div class="brand-lockup"><img class="app-logo-mark" src="/assets/draftloom-logo.svg" alt="" width="34" height="34"><span class="brand-copy"><strong>公众号排版</strong><small>Draftloom</small></span><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
         <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="按文章篇幅与章节密度控制数量，识别图片内容并匹配正文章节">图片智能导入</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
@@ -1189,7 +1203,7 @@ async function submitDraftToWechat({skipConfirm=false}={}){
   }
 }async function readArticleFile(file){
   const kind=getArticleFileKind(file);
-  if(kind==='text') return {text:await file.text(),kind,warnings:[]};
+  if(kind==='text') { const markdown=normalizeArticleMarkdown(await file.text()); return {text:markdown,markdown,format:'markdown',kind,warnings:[]}; }
   if(kind!=='docx'&&kind!=='pdf') throw new Error(`不支持导入文件：${file.name||'未命名文件'}`);
   const result=await fetchLocalApi('/api/extract-document',{method:'POST',headers:{'content-type':file.type||'application/octet-stream','x-file-name':encodeURIComponent(file.name||`document.${kind}`)},body:await file.arrayBuffer()},`识别 ${kind.toUpperCase()} 文档`);
   if(!String(result.text||'').trim()) throw new Error(`${kind.toUpperCase()} 未识别出可用文字；扫描版 PDF 暂不支持 OCR`);
@@ -1213,7 +1227,8 @@ async function handleArticleImport(fileList=[], pastedText=''){
       const generated=incoming.meta.visualPlan?.generatedAssetIds?.length||0;
       const reused=Math.max(0,assets.length-newAssets.length);
       const sourceLabel=extracted.kind==='docx'?'DOCX':extracted.kind==='pdf'?'PDF':'文字稿';
-      setStatus(warnings.length?`已完成 ${sourceLabel} 发布工作流并导入，${warnings.length} 条提示`:`已完成 ${sourceLabel} 发布工作流${reused?`，复用素材 ${reused} 张`:''}${generated?`，新增创意图 ${generated} 张`:''}`);
+      const converterLabel=extracted.converter==='microsoft-markitdown'?'（Microsoft MarkItDown）':extracted.converter==='mammoth-turndown'?'（Mammoth→Turndown）':extracted.converter==='pdf-parse-markdown'?'（本地 PDF→Markdown）':'';
+      setStatus(warnings.length?`已完成 ${sourceLabel}${converterLabel} 发布工作流并导入，${warnings.length} 条提示`:`已完成 ${sourceLabel}${converterLabel} 发布工作流${reused?`，复用素材 ${reused} 张`:''}${generated?`，新增创意图 ${generated} 张`:''}`);
     }
   } catch(err) { setStatus(`导入失败：${err.message}`); }
 }
@@ -1250,5 +1265,8 @@ window.wechatLayoutHarness = {  getState: () => structuredClone(doc),
 };
 
 const loadedOptimization=autoOptimizeLoadedDocument();
+const motionLayer = createMotionLayer(document);
+window.draftloomMotion = motionLayer;
+window.addEventListener('pagehide', () => motionLayer.revert(), { once: true });
 render();
 if(loadedOptimization?.changes?.length) setStatus(`自动微信约束优化：${loadedOptimization.changes.join('；')}`);

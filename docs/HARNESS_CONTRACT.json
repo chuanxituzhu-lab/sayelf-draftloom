@@ -1,6 +1,6 @@
 {
   "name": "wechat-layout-harness",
-  "version": "0.4.2",
+  "version": "0.4.5",
   "state_model": "single-document-source-of-truth-with-optional-humanize-six-stage-workflow",
   "view_state_excluded": ["previewZoom", "selection"],
   "events": ["wechat-layout:changed"],  "methods": ["getState", "getWorkflowState", "applyText", "applyIntent", "importArticle", "humanizePreview", "humanizeApply", "humanizeSkip", "publishingWorkflow", "autoFormat", "getLayoutGuidance", "addImage", "selectBlock", "undo", "redo"],
@@ -9,11 +9,27 @@
   "humanizer_modes": ["natural", "conservative"],
   "import_model": {
     "text": "Markdown or plain text",
+    "canonical_intermediate": "Markdown",
+    "office_converter": "DOCX: Microsoft MarkItDown stream -> Markdown; fallback Mammoth HTML -> Turndown Markdown",
+    "pdf_converter": "local PDF text extraction -> Markdown normalization",
+    "auto_select_by_extension": true,
     "assets": "local image assets as data URLs",
     "preserves_original": true,
     "unmatched_images": "append_and_warn"
   },
   "max_history": 50,
+  "core_content": {
+    "type": "CoreContent",
+    "version": 1,
+    "source": "local-deterministic",
+    "epistemic": "inference",
+    "localOnly": true,
+    "fields": ["thesis", "topic", "problem", "method", "conclusion", "keywords", "keySentences"],
+    "evidence_sentence_types": ["TOPIC", "PROBLEM", "METHOD", "CONCLUSION"],
+    "bodyRewritten": false,
+    "requiresReview": true,
+    "validator": "validateCoreContent"
+  },
   "workflow": {
     "version": 2,
     "stages": ["recognize", "humanize", "distill", "layout", "review", "submit"],

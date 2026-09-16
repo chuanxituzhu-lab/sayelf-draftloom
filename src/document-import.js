@@ -1,5 +1,17 @@
 const ARTICLE_EXTENSIONS = Object.freeze(['.md', '.markdown', '.txt', '.docx', '.pdf']);
 
+/** Normalizes a text source before it enters the shared Markdown pipeline. */
+export function normalizeArticleMarkdown(value = '') {
+  return String(value ?? '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(line => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function extensionOf(fileOrName = '') {
   const name = typeof fileOrName === 'string' ? fileOrName : fileOrName?.name || '';
   const dot = String(name).lastIndexOf('.');

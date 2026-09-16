@@ -14,6 +14,34 @@ body {
   color: var(--ui-ink);
 }
 
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 176px;
+}
+
+.app-logo-mark {
+  display: block;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  filter: drop-shadow(0 4px 7px rgba(29, 112, 76, .14));
+}
+
+.brand-copy {
+  display: grid;
+  gap: 1px;
+  line-height: 1.1;
+}
+
+.brand-copy small {
+  color: var(--ui-muted);
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
 .shell {
   grid-template-rows: 66px 1fr 34px;
   background:

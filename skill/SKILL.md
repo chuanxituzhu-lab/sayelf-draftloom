@@ -3,11 +3,11 @@ name: wechat-layout
 description: Run a local-first Chinese WeChat Official Account publishing workflow with DOCX/PDF text extraction, special-marker cleanup, optional humanization, content distillation, deterministic layout, reference-derived visual systems, WeChat review, explicit draft submission, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、内容提炼、去 AI 味、发布审核、图片插入、视觉主题或本地预览。
 ---
 
-# 公众号排版 Skill — v0.4.2
+# 公众号排版 Skill — v0.4.5
 
 ## Purpose
 
-将文字稿转换为微信公众号草稿的可回退工作流，并保持 GUI、文档状态、微信预览和提交结果一致。默认顺序为：识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交。
+将文字稿转换为微信公众号草稿的可回退工作流，并保持 GUI、文档状态、微信预览和提交结果一致。默认顺序为：识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交。WebUI 预留共享 GSAP Motion Layer，动效需要时直接调用；GSAP 是共享依赖，不拆成新的 Skill。
 
 ## Workflow contract
 
@@ -15,12 +15,28 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 
 1. `recognizeArticleStage`：本地识别文字、Markdown、DOCX、PDF，清理展示标记并生成结构化区块；原稿只读保留。
 2. `humanizeArticleStage`（可选）：先生成正文差异预览；只有人工确认后才应用自然化新版本，不修改事实、数字、引用和核心观点。
-3. `distillArticleStage`：基于已接受的正文提炼核心观点、内容概要、标题候选和关键词；默认不改写正文，人工标题不会被覆盖。
+3. `distillArticleStage`：基于已接受的正文生成 `CoreContent v1`（主题、问题、方法、结论、关键词和关键证据句）、内容概要、标题候选和来源元数据；默认不改写正文，人工标题不会被覆盖。
 4. `layoutArticleStage`：统一字体、字号、行距、段距和标题层级，拆分过长段落，局部标注重点，并按章节密度安排图片/封面。
 5. `reviewArticleStage`：检查标题、作者、摘要、正文字符/大小、封面、图片和 HTML；只自动修安全项，错误与建议都保留在报告中。
 6. `prepareWorkflowSubmission` + 现有提交适配器：生成微信 payload；只有用户显式确认且授权可用时，才上传图片并创建草稿，绝不代替后台群发。
 
 `runPublishingWorkflow` 负责按依赖串联本地阶段并准备提交，不直接产生网络副作用。工作流状态写入 `doc.meta.workflow`：每个阶段都有 `status`、`at`、`report` 和 handoff；自然化预览会停在人工闸门，应用后自动让提炼、排版、审核和提交结果失效；阶段转换、检查点和证据写入本地 ledger，提交结果通过 `recordWorkflowSubmission` 写回。
+
+## Local Markdown adapter
+
+跨格式输入统一先落到本地 Markdown 中间稿，并由文件类型自动调用适配器，不增加额外确认步骤：
+
+- `.docx`：优先调用 Microsoft 开源 MarkItDown 的 `convert_stream()`；未安装时回退到 Mammoth 提取标题、列表、表格等语义 HTML，再由 Turndown（MIT）转换为 Markdown。
+- `.pdf`：本机 PDF 解析器提取文本，再由本地规范化器生成 Markdown；扫描版 PDF 没有文字层时明确提示，不伪造识别结果。MarkItDown 仅作为 DOCX 的可选适配器，不强行替代更适合版式保真的 PDF 路径。
+- `.md` / `.txt`：直接执行 BOM、换行、空白和展示标记规范化。
+
+适配器只在本机运行；成功后排版、提炼和审核只读取已接受的 Markdown/Document State。失败时保留当前文章状态并报告具体阶段，禁止静默回退为不可核对的纯文本。
+
+## CoreContent v1 contract
+
+`CoreContent` 是从已接受正文派生的本地推断对象，不是第二篇文章，也不替换正文。它固定包含 `thesis`、`topic`、`problem`、`method`、`conclusion`、`keywords` 和 `keySentences`，并标记 `epistemic: inference`、`localOnly: true`。`keySentences` 保留正文原句、`TOPIC/PROBLEM/METHOD/CONCLUSION` 类型和原文位置；正文未明确表达的问题、方法或结论保持 `null`，不靠猜测补齐。
+
+标题和摘要另存 `titleSource`、`digestSource`、`contentSource`、`bodyRewritten`、`requiresReview`、`localOnly` 元数据。交给排版前必须通过 `validateCoreContent`；未来 AI Harness 只能在显式授权且传输边界清楚时接入，并必须返回同一 schema、经过本机校验和人工复核。普通界面展示字段摘要，证据句折叠展示，不把原始 JSON 混入文章正文。
 
 ## State rule
 
@@ -45,7 +61,7 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 - `addImage({name,type,dataUrl,alt})`：新图片进入素材库。
 - `replaceSelectedImage(assetId)`：用素材库图片替换当前选中的图片区块。
 - `deleteImage(assetId)`：从素材库删除素材，并同步移除文章/画廊中的对应图片引用；支持 undo/redo。
-- `importArticle({text,filename,assets})`：导入已提取的文章文字与本地图片，自动清理 `*`、`#`、反引号等展示标记、总结正文、生成爆款标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。GUI 的 DOCX/PDF 识别通过本机 `/api/extract-document` 完成，原始稿件保留用于回滚。
+- `importArticle({text,filename,assets})`：导入 Markdown 中间稿与本地图片，自动清理 `*`、`#`、反引号等展示标记、总结正文、生成爆款标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。GUI 的 DOCX/PDF 识别通过本机 `/api/extract-document` 完成：DOCX 优先走 Microsoft MarkItDown，未安装时回退 Mammoth→Turndown；PDF/TXT 走本地 Markdown 规范化，原文件名和原始稿件信息保留用于回滚。
 - `publishingWorkflow()`：在当前文档上运行识别、可选自然化、核心提炼、自动排版和公众号审核本地阶段，并显示提交是否已准备好；WebUI 的“一键执行1-4”绑定到同一函数，不自动联网。
 - `humanizePreview(mode)` / `humanizeApply()` / `humanizeSkip()`：生成去 AI 味正文预览，人工确认应用或保留原文跳过；应用后自动要求重新提炼、排版和审核。
 - GUI 提供“清空重传”和“文章记录”：换稿前自动保存当前稿件，最近 12 篇文章结构保存在浏览器本机；记录可重新打开或删除，图片引用复用本地素材库。
@@ -63,6 +79,10 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 - `checkWechat()`：一键执行微信字段、正文、封面和排版检查；先自动修正可安全修正项，再返回仍需人工处理的问题。
 - `selectBlock(id)`：GUI 选择块。
 - `undo()` / `redo()`：版本回滚/重做。
+
+## Shared Motion Layer
+
+`src/motion.js` 是 WebUI 的共享动效底座，提供 `from`、`to`、`fromTo`、`set`、`timeline` 和 `add`，并统一处理默认参数、`prefers-reduced-motion` 及 `revert()` / `kill()` 清理。页面启动时只注册 `window.draftloomMotion`，不会自动播放动画。动效属于视图层，不写入 Document State，也不改变微信 HTML 导出；后续需要动效的功能直接复用该入口，不重复建设动效底座。
 
 ## MVP Intents
 

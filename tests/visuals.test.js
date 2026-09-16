@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoComposeDocument, deriveArticleTitle, deriveImageBudget, evaluateHotTopicFit, extractCoreContent, extractKeywords, generateArticleKeywords, generateViralTitlePlan, planVisualLayout, recognizeAssetContent, renderCreativeSvg } from '../src/visuals.js';
+import { autoComposeDocument, deriveArticleTitle, deriveImageBudget, evaluateHotTopicFit, extractCoreContent, extractKeywords, generateArticleKeywords, generateViralTitlePlan, normalizeCoreContent, planVisualLayout, recognizeAssetContent, renderCreativeSvg, validateCoreContent } from '../src/visuals.js';
 import { importArticle, parseCommand } from '../src/core.js';
 
 test('natural language command exposes smart visual composition', () => {
@@ -38,6 +38,30 @@ test('core extraction selects signal-bearing sentences and keeps reviewable poin
   assert.match(core.summary, /AI 可以降低制作成本/);
   assert.ok(core.points.some(point => point.includes('执行决定结果')));
   assert.equal(core.source, 'local-deterministic');
+});
+
+test('core extraction emits the v1 inference contract without promoting implicit fields', () => {
+  const core = extractCoreContent({
+    text: '这篇文章讨论内容工作流的变化。当前最大的难点是素材分散、难以复用。建议先统一素材，再按章节安排图片。因此，结构决定阅读体验。',
+    max: 96,
+    maxPoints: 4
+  });
+  assert.equal(core.type, 'CoreContent');
+  assert.equal(core.version, 1);
+  assert.equal(core.epistemic, 'inference');
+  assert.equal(core.localOnly, true);
+  assert.match(core.topic, /内容工作流/);
+  assert.match(core.problem, /难点/);
+  assert.match(core.method, /建议先统一素材/);
+  assert.match(core.conclusion, /结构决定阅读体验/);
+  assert.ok(core.keySentences.every(item => ['TOPIC', 'PROBLEM', 'METHOD', 'CONCLUSION'].includes(item.type)));
+  assert.equal(validateCoreContent(core).ok, true);
+
+  const normalized = normalizeCoreContent({ thesis: '观点', topic: '主题', keySentences: [{ sentence: '证据句', type: 'TOPIC', index: 2 }] });
+  assert.equal(normalized.epistemic, 'inference');
+  assert.equal(normalized.localOnly, true);
+  assert.equal(validateCoreContent(normalized).ok, true);
+  assert.equal(validateCoreContent({}).ok, false);
 });
 
 test('keyword extraction is deterministic and useful for semantic image matching', () => {

@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { getArticleFileKind, sanitizeArticleText, sanitizeImportedDocument } from '../src/document-import.js';
 import { importArticle, renderArticleHtml } from '../src/core.js';
 import { detectArticleEmphasis } from '../src/document-import.js';
-import { documentKind, extractLocalDocument } from '../scripts/document-extract.mjs';
+import { documentKind, extractLocalDocument, htmlToMarkdown, normalizeMarkdown, textToMarkdown } from '../scripts/document-extract.mjs';
 import { MAX_ARTICLE_HISTORY, createArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from '../src/article-history.js';
 
 function makePdf(text) {
@@ -39,6 +40,26 @@ test('article file detection accepts text, DOCX, and PDF', () => {
 test('sanitizeArticleText removes Markdown markers while retaining article text', () => {
   const value = sanitizeArticleText('# 标题\n\n**重点**：`内容`\n> 引用\n---\n- 列表');
   assert.equal(value, '标题\n\n重点：内容\n引用\n列表');
+});
+
+test('local document conversion produces a Markdown intermediate without network access', () => {
+  const markdown = htmlToMarkdown('<h1>文章标题</h1><p>正文 <strong>重点</strong>。</p><h2>执行步骤</h2><ol><li>先准备素材</li><li>再进行排版</li></ol>');
+  assert.match(markdown, /^# 文章标题/m);
+  assert.match(markdown, /\*\*重点\*\*/);
+  assert.match(markdown, /^## 执行步骤/m);
+  assert.match(markdown, /1\. 先准备素材/);
+  assert.equal(normalizeMarkdown('  一段文字。\r\n\r\n\r\n'), '一段文字。');
+  assert.equal(textToMarkdown('纯文本\r\n\r\n第二段'), '纯文本\n\n第二段');
+});
+
+test('DOCX extraction keeps Word list structure in the Markdown handoff', async () => {
+  const buffer = await readFile(new URL('../node_modules/mammoth/test/test-data/simple-list.docx', import.meta.url));
+  const result = await extractLocalDocument({ buffer, filename: 'simple-list.docx' });
+  assert.equal(result.kind, 'docx');
+  assert.equal(result.format, 'markdown');
+  assert.match(result.markdown, /Apple/);
+  assert.match(result.markdown, /Banana/);
+  assert.match(result.markdown, /-\s+Apple/);
 });
 
 test('sanitizeImportedDocument keeps original source and cleans document fields', () => {
@@ -100,6 +121,8 @@ test('extractLocalDocument extracts text from a local PDF buffer', async () => {
     contentType: 'application/pdf'
   });
   assert.equal(result.kind, 'pdf');
+  assert.equal(result.format, 'markdown');
+  assert.equal(result.markdown, result.text);
   assert.equal(result.pages, 1);
   assert.match(result.text, /Local PDF/);
 });

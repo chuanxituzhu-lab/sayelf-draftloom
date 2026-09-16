@@ -11,7 +11,8 @@ import {
   autoComposeDocument,
   extractCoreContent,
   generateArticleKeywords,
-  generateViralTitlePlan
+  generateViralTitlePlan,
+  validateCoreContent
 } from './visuals.js';
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, charCount } from './wechat-limits.js';
 
@@ -24,7 +25,7 @@ export const WORKFLOW_VERSION = 2;
 export const WORKFLOW_STAGES = Object.freeze([
   Object.freeze({ key: 'recognize', label: '识别文字', description: '把文字稿、Markdown、DOCX、PDF 变成结构化区块' }),
   Object.freeze({ key: 'humanize', label: '自然化', description: '可选地把正文调整为更自然的人类表达；必须先预览并确认', optional: true }),
-  Object.freeze({ key: 'distill', label: '提炼内容', description: '提炼核心观点、标题候选、概要和关键词' }),
+  Object.freeze({ key: 'distill', label: '提炼内容', description: '生成 CoreContent v1、标题候选、概要和关键词' }),
   Object.freeze({ key: 'layout', label: '自动排版', description: '统一字体、段落、层级、重点标注和图片位置' }),
   Object.freeze({ key: 'review', label: '公众号审核', description: '检查字段、正文、封面和微信兼容性' }),
   Object.freeze({ key: 'submit', label: '提交草稿箱', description: '经确认后上传素材并创建公众号草稿' })
@@ -33,7 +34,7 @@ export const WORKFLOW_STAGE_KEYS = Object.freeze(WORKFLOW_STAGES.map(stage => st
 export const WORKFLOW_CONTRACTS = Object.freeze({
   recognize: Object.freeze({ requiredInputs: ['文章文字或现有文档'], outputs: ['结构化区块', '识别报告'], acceptance: '存在可用文字；文件类型和识别警告已记录', handoff: 'humanize' }),
   humanize: Object.freeze({ requiredInputs: ['已识别的结构化正文'], outputs: ['自然化预览或新正文版本', '正文差异报告'], acceptance: '预览需人工确认；应用后正文产生可回退版本', handoff: 'distill' }),
-  distill: Object.freeze({ requiredInputs: ['已接受的正文'], outputs: ['核心内容', '标题候选', '内容概要', '关键词'], acceptance: '结果可追溯到当前正文；不静默改写正文', handoff: 'layout' }),
+  distill: Object.freeze({ requiredInputs: ['已接受的正文'], outputs: ['CoreContent v1', '标题候选', '内容概要', '关键词', '来源元数据'], acceptance: 'CoreContent 通过本机校验、证据句可回看；结果可追溯到当前正文且不静默改写正文', handoff: 'layout' }),
   layout: Object.freeze({ requiredInputs: ['核心内容和结构化正文'], outputs: ['微信兼容排版', '图片位置计划'], acceptance: '排版不改变语义；图片数量受内容预算约束', handoff: 'review' }),
   review: Object.freeze({ requiredInputs: ['最终排版文档'], outputs: ['微信规则检查报告'], acceptance: '字段、正文、封面和素材通过或明确标记人工问题', handoff: 'submit' }),
   submit: Object.freeze({ requiredInputs: ['审核通过的草稿 payload'], outputs: ['本地草稿包或微信草稿编号'], acceptance: '远程成功必须有接口事实；默认不产生网络副作用', handoff: null })
@@ -335,6 +336,19 @@ export function distillArticleStage(doc = {}, { applyTitleWhenMissing = true } =
   const next = clone(doc);
   const source = workflowSource(next);
   const coreContent = extractCoreContent({ text: source, title: next.title || '', max: 96, maxPoints: 3 });
+  const coreValidation = validateCoreContent(coreContent);
+  if (!coreValidation.ok) {
+    const report = {
+      status: 'blocked',
+      source: 'local-deterministic',
+      reason: `CoreContent 校验失败：${coreValidation.errors.join('；')}`,
+      coreContent,
+      coreValidation,
+      bodyRewritten: false,
+      localOnly: true
+    };
+    return { doc: writeWorkflow(doc, 'distill', { status: 'blocked', report }), report };
+  }
   const titlePlan = generateViralTitlePlan({
     text: source,
     filename: next.meta?.importedFrom || '',
@@ -356,6 +370,26 @@ export function distillArticleStage(doc = {}, { applyTitleWhenMissing = true } =
     next.subtitle = coreContent.summary;
     next.meta = { ...(next.meta || {}), subtitleSource: 'core' };
   }
+  const contentMetadata = {
+    title: next.title || titlePlan.selected || '',
+    digest: next.subtitle || coreContent.summary || '',
+    titleSource: next.meta?.titleLocked === true
+      ? 'human'
+      : next.meta?.titleSource === 'source'
+        ? 'source'
+        : titleWasMissing
+          ? (next.title ? 'auto' : 'placeholder')
+          : 'source',
+    digestSource: next.meta?.subtitleLocked === true || next.meta?.subtitleSource === 'human'
+      ? 'human'
+      : next.subtitle
+        ? (subtitleWasAutomatic ? 'auto' : 'source')
+        : 'empty',
+    contentSource: next.meta?.importedFrom || next.original?.filename || 'article.md',
+    bodyRewritten: false,
+    requiresReview: true,
+    localOnly: true
+  };
   next.meta = {
     ...(next.meta || {}),
     visualPlan: { ...(next.meta?.visualPlan || {}), coreContent, keywords: keywordPlan.keywords },
@@ -364,6 +398,8 @@ export function distillArticleStage(doc = {}, { applyTitleWhenMissing = true } =
       version: 1,
       source: 'local-deterministic',
       coreContent,
+      coreValidation,
+      metadata: contentMetadata,
       titlePlan,
       keywordPlan,
       appliedAt: now()
@@ -374,6 +410,9 @@ export function distillArticleStage(doc = {}, { applyTitleWhenMissing = true } =
     source: 'local-deterministic',
     coreSummary: coreContent.summary,
     corePoints: coreContent.points,
+    coreContent,
+    coreValidation,
+    metadata: contentMetadata,
     keywords: keywordPlan.keywords,
     selectedTitle: titlePlan.selected,
     titleCandidates: titlePlan.candidates.map(item => ({ title: item.title, rationale: item.rationale, score: item.score })),
