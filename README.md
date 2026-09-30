@@ -1,4 +1,4 @@
-# Draftloom 公众号自动排版 v0.4.8
+# Draftloom 公众号自动排版 v0.4.9
 
 把 Markdown、TXT、DOCX、PDF 文章导入后，先在本机统一转换为 Markdown 中间稿，再按**识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交**工作流处理：完成本地识别、清理特殊符号、正文自然化、提炼核心、智能排版、生成封面、手机预览，最后导出微信 HTML 或提交到公众号草稿箱。DOCX 优先调用 Microsoft 开源 MarkItDown 本地转换，未安装时回退到 Mammoth + Turndown；原始输入信息和 Markdown 中间稿保留用于回退。WebUI 顶部使用本地植入的 SAYELF 山野精灵 Logo，浏览器标签页也复用同一图标；新增“微信官方深色”可选视觉系统：深色底、绿色结构锚点、局部重点和居中留边的图片卡片。WebUI 预留共享 GSAP Motion Layer，需要动效时直接调用，不新增 Skill，也不把动效逻辑散落到各功能模块。
 
@@ -50,11 +50,11 @@ $env:PORT="4177"; npm start
 
 ## 最新版本下载
 
-当前本地工作版本：**v0.4.8**；GitHub 最新公开版本：**v0.4.8**
+当前本地工作版本：**v0.4.9**；GitHub 最新公开版本：**v0.4.9**
 
 - [打开 GitHub 仓库](https://github.com/chuanxituzhu-lab/sayelf-draftloom)
-- [下载最新 v0.4.8 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.8.zip)
-- [查看最新 v0.4.8 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.8/skill/SKILL.md)
+- [下载最新 v0.4.9 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.9.zip)
+- [查看最新 v0.4.9 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.9/skill/SKILL.md)
 
 源码 ZIP 已包含最新 Skill、WebUI、命令行工具和本地工作流；本地独立导出包仍保存在 `.local-data/exports/`，不上传到公开仓库。
 
@@ -224,6 +224,12 @@ npm start
 - 正文默认调整为 15px、2.02 倍行距，降低正文对比度，保持长文阅读呼吸感。
 - 三级标题采用绿色视觉锚点，正文截图统一使用 88% 最大宽度的深色图片卡片，预览与微信导出 HTML 同步生效。
 - 更新 `skill/SKILL.md`、`SKILL.md` 与 `docs/visual-system.md`，记录参考边界、设计决策和可验证规则。
+
+## v0.4.9 更新内容
+
+- 本地素材库改为只追加、不覆盖：重复素材 ID 保留已有本地文件，新素材正常累积。
+- 达到 200 项上限时不再先进先出淘汰旧素材；超额上传会提示并跳过，需人工删除后再添加。
+- 增加回归测试，验证同 ID 不覆盖、不同 ID 可累积及容量语义。
 
 ## v0.4.8 更新内容
 

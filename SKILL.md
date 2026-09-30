@@ -7,7 +7,7 @@ metadata:
 
 # 公众号自动排版（sayelf-draftloom）
 
-基于 draftloom（本地优先的公众号文章工作流与排版工具，v0.4.8）实现文字稿件到微信草稿的可回退流水线。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。DOCX 在本机优先调用 Microsoft 开源 MarkItDown，未安装时回退到 Mammoth + MIT Turndown；PDF/TXT 也统一进入本地 Markdown 中间稿，仅清理 Markdown 展示标记，保留 `C#`、`A*`、`2*3`、话题标签等正文字符；扫描版 PDF 暂不做 OCR。WebUI 预留共享 GSAP Motion Layer，动效按需直接调用，不新增独立 Skill。
+基于 draftloom（本地优先的公众号文章工作流与排版工具，v0.4.9）实现文字稿件到微信草稿的可回退流水线。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。DOCX 在本机优先调用 Microsoft 开源 MarkItDown，未安装时回退到 Mammoth + MIT Turndown；PDF/TXT 也统一进入本地 Markdown 中间稿，仅清理 Markdown 展示标记，保留 `C#`、`A*`、`2*3`、话题标签等正文字符；扫描版 PDF 暂不做 OCR。WebUI 预留共享 GSAP Motion Layer，动效按需直接调用，不新增独立 Skill。
 
 ## 安装（WorkBuddy）
 

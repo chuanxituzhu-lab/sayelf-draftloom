@@ -78,6 +78,20 @@ test('smart cover adds a library asset, places it first, and keeps the summary w
   assert.deepEqual(parseCommand('封面一键入库'), { type: 'noop' });
 });
 
+test('adding library assets appends new IDs and never overwrites an existing asset', () => {
+  const doc = createInitialDocument();
+  const original = { id: 'asset-1', name: '素材.png', dataUrl: 'data:image/png;base64,original' };
+  doc.assets = [original];
+  const incoming = [
+    { id: 'asset-1', name: '素材.png', dataUrl: 'data:image/png;base64,replacement' },
+    { id: 'asset-2', name: '素材.png', dataUrl: 'data:image/png;base64,another' }
+  ];
+  const result = reduceDocument(doc, { type: 'addAssets', assets: incoming });
+  assert.equal(result.doc.assets.length, 2);
+  assert.equal(result.doc.assets.find(asset => asset.id === 'asset-1').dataUrl, original.dataUrl);
+  assert.equal(result.doc.assets.find(asset => asset.id === 'asset-2').dataUrl, incoming[1].dataUrl);
+});
+
 test('smart cover resets summary and both cover copy fields from the extracted core', () => {
   const cover = { id: 'stale-cover', name: '封面.png', type: 'image/png', size: 1, width: 900, height: 383, dataUrl: 'data:image/png;base64,AA==', alt: '旧封面' };
   let doc = importArticle({

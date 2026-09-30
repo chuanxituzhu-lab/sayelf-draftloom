@@ -163,3 +163,12 @@ test('WebUI binds both one-click 1-4 buttons without duplicate IDs', async () =>
   assert.match(appSource, /showSubmissionToast\(result\.delivery\)/);
   assert.match(appSource, /submitButton\.disabled=true/);
 });
+
+test('local asset library preserves existing entries and refuses silent FIFO eviction', async () => {
+  const appSource = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+  assert.match(appSource, /function mergeAssets\([\s\S]*?!byId\.has\(asset\.id\)[\s\S]*return \[\.\.\.byId\.values\(\)\]/);
+  assert.doesNotMatch(appSource, /slice\(-MAX_ASSETS\)/);
+  assert.match(appSource, /const availableSlots=Math\.max\(0,MAX_ASSETS-savedAssets\.length\)/);
+  assert.match(appSource, /本机累积保存 · 上传只追加/);
+  assert.match(appSource, /手动删除才移除/);
+});

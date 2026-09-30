@@ -42,14 +42,14 @@ function loadDocument() {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (!saved) return null;
     const normalized = applyArticleEmphasis(saved);
-    normalized.assets = mergeAssets(normalized.assets || [], loadAssetLibrary());
+    normalized.assets = mergeAssets(loadAssetLibrary(), normalized.assets || []);
     return normalized;
   } catch { return null; }
 }
 function loadAssetLibrary() {
   try {
     const value = JSON.parse(localStorage.getItem(ASSET_LIBRARY_KEY) || '[]');
-    return Array.isArray(value) ? value.filter(asset => asset?.id && asset?.dataUrl).slice(-MAX_ASSETS) : [];
+    return Array.isArray(value) ? value.filter(asset => asset?.id && asset?.dataUrl) : [];
   } catch { return []; }
 }
 function loadArticleHistory() {
@@ -128,8 +128,8 @@ function deleteSavedArticle(id) {
 }
 function mergeAssets(...lists) {
   const byId = new Map();
-  for (const list of lists) for (const asset of Array.isArray(list) ? list : []) if (asset?.id && asset?.dataUrl) byId.set(asset.id, asset);
-  return [...byId.values()].slice(-MAX_ASSETS);
+  for (const list of lists) for (const asset of Array.isArray(list) ? list : []) if (asset?.id && asset?.dataUrl && !byId.has(asset.id)) byId.set(asset.id, asset);
+  return [...byId.values()];
 }
 function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(doc));
@@ -229,9 +229,9 @@ function renderLibraryPane() {
   const query = assetQuery.trim().toLowerCase();
   let assets = doc.assets.filter(asset => (!query || `${asset.name} ${asset.alt || ''}`.toLowerCase().includes(query)) && (assetFilter !== 'unused' || !assetInUse(asset.id)));
   if (assetSort === 'name') assets = [...assets].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-  const scopeLabel = libraryTab === 'resource' ? '本地资源库 · 可跨文章复用' : '先上传，后续可反复插入或替换';
+  const scopeLabel = libraryTab === 'resource' ? '本地资源库 · 可跨文章复用' : '本机累积保存 · 上传只追加';
   const cards = assets.length ? assets.map(a => { const drag = libraryTab === 'mine' ? ` draggable="true" data-asset-drag="${esc(a.id)}" aria-label="拖动 ${esc(a.name)} 到头条封面"` : ''; return `<div class="asset-card" data-asset-card="${esc(a.id)}"${drag}><img src="${a.dataUrl}" alt="${esc(a.alt||a.name)}"><span title="${esc(a.name)}">${esc(a.name)}</span><small>${a.recognition?.labels?.length ? `识别：${esc(a.recognition.labels.slice(0, 2).join(' · '))}` : a.generated ? (assetInUse(a.id) ? '自动生成 · 删除会同步移除' : '自动生成 · 可替换') : assetInUse(a.id) ? '文章使用中 · 删除会同步移除' : '已入库 · 可删除'}</small><div class="asset-actions"><button data-asset-insert="${esc(a.id)}" title="在文章末尾插入">插入</button><button data-asset-replace="${esc(a.id)}" title="替换当前选中的图片">替换当前</button><button data-asset-delete="${esc(a.id)}" title="删除素材及文章中的图片">删除</button></div></div>`; }).join('') : `<div class="empty library-empty">${query ? '没有匹配的素材' : '暂无素材，可点击“上传素材”添加'}</div>`;
-  return `<div class="library-header"><div class="library-tabs">${tabs}</div><div class="library-toolbar"><input id="assetSearch" value="${esc(assetQuery)}" placeholder="搜索素材"><button data-library-sort title="${assetSort === 'name' ? '恢复最近添加排序' : '按名称排序'}">↕</button><button data-library-filter class="${assetFilter === 'unused' ? 'active' : ''}" title="只看未使用素材">⌁</button></div><div class="library-meta"><span>${scopeLabel}</span><span>${doc.assets.length}/${MAX_ASSETS}</span><label class="mini-button">+ 上传素材<input id="assetInput" type="file" accept="image/*" multiple hidden></label></div></div><div class="asset-grid">${cards}</div><div class="library-footer"><span>支持批量上传 · 大图自动压缩</span><button data-clear-unused>清理未使用</button></div>`;
+  return `<div class="library-header"><div class="library-tabs">${tabs}</div><div class="library-toolbar"><input id="assetSearch" value="${esc(assetQuery)}" placeholder="搜索素材"><button data-library-sort title="${assetSort === 'name' ? '恢复最近添加排序' : '按名称排序'}">↕</button><button data-library-filter class="${assetFilter === 'unused' ? 'active' : ''}" title="只看未使用素材">⌁</button></div><div class="library-meta"><span>${scopeLabel}</span><span>${doc.assets.length}/${MAX_ASSETS}</span><label class="mini-button">+ 上传素材<input id="assetInput" type="file" accept="image/*" multiple hidden></label></div></div><div class="asset-grid">${cards}</div><div class="library-footer"><span>图片仅在本机累积保存 · 手动删除才移除 · 上限 ${MAX_ASSETS} 张</span><button data-clear-unused title="点击后删除所有未在当前文章中使用的素材">清理未使用</button></div>`;
 }
 function refreshLibraryPane() {
   const pane = document.querySelector('#libraryPane');
@@ -1117,7 +1117,7 @@ function bindEvents() {
 function setZoom(v){ zoom=Math.min(1.4,Math.max(.6,Math.round(v*10)/10)); const article=document.querySelector('.wechat-article'); article.style.transform=`scale(${zoom})`; document.querySelector('#zoomText').textContent=`${Math.round(zoom*100)}%`; }
 async function handleAssets(e){
   const files=[...e.target.files].slice(0, Math.max(0, MAX_ASSETS - doc.assets.length));
-  if(!files.length)return;
+  if(!files.length){if(e.target.files.length)setStatus(`本地素材库已达 ${MAX_ASSETS} 张上限；请手动删除不需要的素材后再上传`);return;}
   try {
     setStatus(`正在处理 ${files.length} 张图片…`);
     const assets=await Promise.all(files.map(async file=>{
@@ -1125,7 +1125,7 @@ async function handleAssets(e){
       return {id:crypto.randomUUID(),name:file.name,type:prepared.type,size:prepared.size,dataUrl:prepared.dataUrl,alt:file.name.replace(/\.[^.]+$/,'')};
     }));
     if(commit({type:'addAssets',assets},`素材批量入库：${assets.length} 张`)) matchLibraryAssetsToArticle();
-    if (e.target.files.length > files.length) setStatus(`已达到素材容量 ${MAX_ASSETS} 张，超出部分未导入`);
+    if (e.target.files.length > files.length) setStatus(`已达到素材容量 ${MAX_ASSETS} 张，超出部分未导入；原有素材未覆盖，请手动删除后再上传`);
   } catch(err) { setStatus(`素材上传失败：${err.message}`); }
   e.target.value='';
 }
@@ -1265,8 +1265,12 @@ async function handleArticleImport(fileList=[], pastedText=''){
     const extracted=articleFile?await readArticleFile(articleFile):{text:pastedText,kind:pastedText?'text':null,warnings:[]};
     const text=extracted.text;
     if(!text&&!imageFiles.length) throw new Error('没有找到文章文字或图片');
-    const newAssets=await Promise.all(imageFiles.map(async file=>{const prepared=await optimizeImageFile(file);return {id:crypto.randomUUID(),name:file.name,type:prepared.type,size:prepared.size,dataUrl:prepared.dataUrl,alt:file.name.replace(/\.[^.]+$/,'')};}));
-    const assets=mergeAssets(loadAssetLibrary(), newAssets);
+    const savedAssets=loadAssetLibrary();
+    const availableSlots=Math.max(0,MAX_ASSETS-savedAssets.length);
+    const acceptedImageFiles=imageFiles.slice(0,availableSlots);
+    const skippedImageCount=imageFiles.length-acceptedImageFiles.length;
+    const newAssets=await Promise.all(acceptedImageFiles.map(async file=>{const prepared=await optimizeImageFile(file);return {id:crypto.randomUUID(),name:file.name,type:prepared.type,size:prepared.size,dataUrl:prepared.dataUrl,alt:file.name.replace(/\.[^.]+$/,'')};}));
+    const assets=mergeAssets(savedAssets, newAssets);
     const workflowResult=runPublishingWorkflow({text,filename:articleFile?.name||'pasted-article.txt',assets},{generateImages:true,maxGenerated:3,autoImageCount:true,autoFix:true});
     const incoming=workflowResult.doc;
     if(extracted.warnings?.length) incoming.meta.importWarnings=[...(incoming.meta.importWarnings||[]),...extracted.warnings.map(item=>`本地 ${extracted.kind?.toUpperCase()||'文档'} 识别提示：${item}`)];
@@ -1276,7 +1280,8 @@ async function handleArticleImport(fileList=[], pastedText=''){
       const reused=Math.max(0,assets.length-newAssets.length);
       const sourceLabel=extracted.kind==='docx'?'DOCX':extracted.kind==='pdf'?'PDF':'文字稿';
       const converterLabel=extracted.converter==='microsoft-markitdown'?'（Microsoft MarkItDown）':extracted.converter==='mammoth-turndown'?'（Mammoth→Turndown）':extracted.converter==='pdf-parse-markdown'?'（本地 PDF→Markdown）':'';
-      setStatus(warnings.length?`已完成 ${sourceLabel}${converterLabel} 发布工作流并导入，${warnings.length} 条提示`:`已完成 ${sourceLabel}${converterLabel} 发布工作流${reused?`，复用素材 ${reused} 张`:''}${generated?`，新增创意图 ${generated} 张`:''}`);
+      const capacityNote=skippedImageCount?`，${skippedImageCount} 张图片因素材库容量已满未入库（原素材未覆盖）`:'';
+      setStatus(warnings.length?`已完成 ${sourceLabel}${converterLabel} 发布工作流并导入，${warnings.length} 条提示${capacityNote}`:`已完成 ${sourceLabel}${converterLabel} 发布工作流${reused?`，复用素材 ${reused} 张`:''}${generated?`，新增创意图 ${generated} 张`:''}${capacityNote}`);
     }
   } catch(err) { setStatus(`导入失败：${err.message}`); }
 }
