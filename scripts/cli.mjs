@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { createInitialDocument, parseCommand, reduceDocument, stamp, clone, importArticle, getLayoutGuidance, renderArticleHtml } from '../src/core.js';
 import { analyzeGrowth, getDefaultGrowthProfile, growthBrief } from '../src/growth.js';
 import { draftCoverCopy, renderCoverSvg, auditCoverImage, COVER_SPEC } from '../src/cover.js';
-import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, charCount } from '../src/wechat-limits.js';
+import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, inspectWechatAssetPlan, charCount, plannedWechatImageType } from '../src/wechat-limits.js';
 import { applyProtectedLocalConfig } from './local-config.mjs';
+import { readProtectedAuth } from './local-auth.mjs';
 import { normalizeWechatAsset, parseImageDataUrl } from './wechat-media.mjs';
 import { extractLocalDocument } from './document-extract.mjs';
 import { distillArticleStage, getWorkflowState, humanizeArticleStage, layoutArticleStage, recordWorkflowSubmission, reviewArticleStage, runPublishingWorkflow, skipHumanizeArticleStage } from '../src/workflow.js';
 
-applyProtectedLocalConfig(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+applyProtectedLocalConfig(projectRoot);
 const args = process.argv.slice(2);
 const command = args.shift();
 const option = (name, fallback = undefined) => { const index = args.indexOf(`--${name}`); return index >= 0 ? args[index + 1] : fallback; };
@@ -38,28 +40,14 @@ async function applyIntent(intent, label) {
   const state = await loadState();
   const result = reduceDocument(state.doc, intent, state.selectedId);
   if (result.error) return { ...state, error: result.error, changed: false };
-  let finalResult = result;
-  if (result.changed && !['optimizeWechat', 'autoFormat'].includes(intent.type)) {
-    const automatic = reduceDocument(result.doc, { type: 'optimizeWechat' }, result.selectedId);
-    if (automatic.changed) finalResult = { ...result, doc: automatic.doc, selectedId: automatic.selectedId, optimization: automatic.optimization, autoOptimized: true };
-  }
+  const finalResult = result;
   if (!finalResult.changed) return { ...state, error: null, changed: false };
   const next = stamp(clone(finalResult.doc), state.doc.meta.revision + 1);
   state.doc = next; state.selectedId = finalResult.selectedId;
-  const historyLabel = finalResult.autoOptimized ? `${label}（自动微信约束优化）` : label;
+  const historyLabel = label;
   state.history = [...(state.history || []), { seq: next.meta.revision, ts: next.meta.updatedAt, label: historyLabel, doc: clone(next) }].slice(-50); state.future = [];
   await saveState(state); return { ...state, changed: true, optimization: finalResult.optimization || null, formatting: finalResult.formatting || null };
 }
-async function optimizeStateForWechat(state) {
-  const result = reduceDocument(state.doc, { type: 'optimizeWechat' }, state.selectedId);
-  if (!result.changed) return result.optimization;
-  const next = stamp(clone(result.doc), state.doc.meta.revision + 1);
-  state.doc = next;
-  state.selectedId = result.selectedId;
-  state.history = [...(state.history || []), { seq: next.meta.revision, ts: next.meta.updatedAt, label: '提交前智能优化微信发布约束', doc: clone(next) }].slice(-50);
-  state.future = [];
-  await saveState(state);
-  return result.optimization;}
 const imageTypes = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml' };
 async function assetFromFile(filePath) {
   const data = await readFile(filePath);
@@ -122,12 +110,6 @@ async function importFromInput() {
   const assets = await Promise.all((await collectImagePaths()).map(assetFromFile));
   const doc = importArticle({ text, filename: articlePath ? basename(articlePath) : 'pasted-article.txt', assets, autoCompose: true, visualOptions: { generate: true, maxGenerated: Number(option('max-generated', 3)), titleMode: 'viral', forceTitle: true } });
   const state = stateFromDocument(doc);
-  const automatic = reduceDocument(state.doc, { type: 'optimizeWechat' }, state.selectedId);
-  if (automatic.changed) {
-    const next = stamp(clone(automatic.doc), state.doc.meta.revision + 1);
-    state.doc = next;
-    state.history.push({ seq: next.meta.revision, ts: next.meta.updatedAt, label: '导入文章（自动微信约束优化）', doc: clone(next) });
-  }
   await saveState(state);
   return { ...state, guidance: getLayoutGuidance(state.doc), warnings: state.doc.meta.importWarnings || [] };
 }
@@ -225,10 +207,7 @@ async function runSingleWorkflowStage(stageName) {
 function renderHtml(doc) { return renderArticleHtml(doc); }
 function dataUrlParts(dataUrl = '') { return parseImageDataUrl(dataUrl); }
 function readPersistedAuth() {
-  try {
-    const saved = JSON.parse(readFileSync(resolve('.local-data/wechat-auth.json'), 'utf8'));
-    return saved?.access_token && (!saved.expires_at || Date.parse(saved.expires_at) > Date.now() + 30_000) ? saved : null;
-  } catch { return null; }
+  return readProtectedAuth(projectRoot);
 }
 async function fetchWechat(url, options = {}, label = '微信接口请求') {
   try {
@@ -315,7 +294,7 @@ async function uploadWechatCover(asset, token) {
 }
 async function publishFromState({ allowRemote = false } = {}) {
   const state = await loadState();
-  const optimization = await optimizeStateForWechat(state);  const out = resolve(option('out', join('.local-data', 'publish', `revision-${state.doc.meta.revision}`)));
+  const out = resolve(option('out', join('.local-data', 'publish', `revision-${state.doc.meta.revision}`)));
   await mkdir(out, { recursive: true });
   const htmlPath = join(out, 'article.html');
   const payloadPath = join(out, 'draft-payload.json');
@@ -348,6 +327,10 @@ async function publishFromState({ allowRemote = false } = {}) {
       renderDoc = clone(state.doc);
       const usedAssetIds = new Set(renderDoc.blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])].filter(Boolean)));
       renderDoc.assets = await Promise.all(renderDoc.assets.map(asset => usedAssetIds.has(asset.id) ? normalizeWechatAsset(asset) : asset));
+      for (const asset of renderDoc.assets.filter(item => usedAssetIds.has(item.id))) {
+        const issue = inspectWechatAssetPlan(asset).errors[0];
+        if (issue) throw new Error(`微信图片 ${asset.name || asset.id}：${issue}`);
+      }
     }
     let thumbMediaId = option('cover-media-id', process.env.WECHAT_COVER_MEDIA_ID || null);
     if (officialApi && !thumbMediaId) {
@@ -406,7 +389,8 @@ async function publishFromState({ allowRemote = false } = {}) {
     htmlPath,
     payloadPath,
     delivery,
-    optimization: optimization ? { changes: optimization.changes, remaining: optimization.validation?.errors?.map(item => item.message) || [], distilled: optimization.distillation, seriesPlan: optimization.seriesPlan } : null,    manual_next_steps: [
+    optimization: null,
+    manual_next_steps: [
       '1. 登录 mp.weixin.qq.com → 草稿箱，人工核对排版/图片/错字',
       '2. 确认无误后在后台手动「群发」或「发布」（本工具不代发）'
     ]
@@ -430,16 +414,14 @@ try {
   else if (command === 'wechat-optimize' || command === 'optimize-wechat') output(await applyIntent({ type: 'optimizeWechat' }, '智能优化微信发布约束'));
   else if (command === 'format' || command === 'auto-format' || command === '排版优化') output(await applyIntent({ type: 'autoFormat' }, '一键优化公众号排版'));
   else if (command === 'wechat-check' || command === 'check-wechat') {
-    const before = await loadState();
-    const optimization = await optimizeStateForWechat(before);
     const state = await loadState();
     const payload = { title: state.doc.title, author: state.doc.author || '', digest: state.doc.subtitle || '', content: renderHtml(state.doc) };
     const article = inspectWechatArticle(payload);
     const coverBlock = state.doc.blocks.find(block => block.type === 'image');
     const coverAsset = coverBlock ? state.doc.assets.find(asset => asset.id === coverBlock.assetId) : null;
-    const cover = coverAsset ? inspectWechatCover({ width: coverAsset.width, height: coverAsset.height, bytes: coverAsset.size, type: coverAsset.type, main: coverAsset.coverMain || '', sub: coverAsset.coverSub || '' }) : null;
+    const cover = coverAsset ? inspectWechatCover({ width: coverAsset.width, height: coverAsset.height, bytes: coverAsset.size, type: plannedWechatImageType(coverAsset.type), main: coverAsset.coverMain || '', sub: coverAsset.coverSub || '' }) : null;
     const errors = [...article.errors, ...(cover?.errors || []).map(message => ({ id: 'titleImage', message }))];
-    output({ changed: Boolean(optimization?.changes?.length), optimization, validation: { ...article, cover, errors, ok: article.ok && Boolean(cover) && !cover?.errors?.length }, guidance: getLayoutGuidance(state.doc), warnings: state.doc.meta.importWarnings || [] });
+    output({ changed: false, optimization: null, validation: { ...article, cover, errors, ok: article.ok && Boolean(cover) && !cover?.errors?.length }, guidance: getLayoutGuidance(state.doc), warnings: state.doc.meta.importWarnings || [] });
   }
   else if (command === 'draft-status') output(wechatDraftStatus());
   else if (command === 'text') output(await applyIntent(parseCommand(option('text', args.join(' '))), '文字指令'));

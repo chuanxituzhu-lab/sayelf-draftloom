@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { plannedWechatImageType } from '../src/wechat-limits.js';
 
 const SVG_TYPE = 'image/svg+xml';
 const PNG_TYPE = 'image/png';
@@ -32,14 +33,16 @@ export function parseImageDataUrl(dataUrl = '') {
 }
 
 /**
- * Convert only SVG assets to a WeChat-compatible local PNG copy. Non-SVG
+ * Convert unsupported-but-rasterizable assets to a WeChat-compatible PNG. Non-converted
  * assets retain their original content and metadata shape.
  */
 export async function normalizeWechatAsset(asset = {}) {
   const parts = parseImageDataUrl(asset.dataUrl);
   if (!parts) throw new Error(`图片 ${asset.name || '未命名'} 不是可上传的本地 Data URL`);
-  const isSvg = parts.type === SVG_TYPE || SVG_EXT.test(String(asset.name || ''));
-  if (!isSvg) return { ...asset, type: parts.type, size: parts.bytes.length };
+  const sourceType = parts.type === SVG_TYPE || SVG_EXT.test(String(asset.name || '')) ? SVG_TYPE : parts.type;
+  const targetType = plannedWechatImageType(sourceType);
+  if (!['image/png', 'image/jpeg', 'image/jpg'].includes(targetType)) throw new Error(`微信图片暂不支持 ${sourceType}：${asset.name || '未命名'}`);
+  if (targetType !== PNG_TYPE || sourceType === PNG_TYPE) return { ...asset, type: parts.type, size: parts.bytes.length };
 
   try {
     const image = sharp(parts.bytes);
@@ -56,6 +59,6 @@ export async function normalizeWechatAsset(asset = {}) {
       convertedFrom: asset.name || SVG_TYPE
     };
   } catch (error) {
-    throw new Error(`SVG 图片 ${asset.name || '未命名'} 转换 PNG 失败：${error.message}`);
+    throw new Error(`图片 ${asset.name || '未命名'} 转换 PNG 失败：${error.message}`);
   }
 }

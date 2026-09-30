@@ -42,6 +42,11 @@ test('sanitizeArticleText removes Markdown markers while retaining article text'
   assert.equal(value, '标题\n\n重点：内容\n引用\n列表');
 });
 
+test('sanitizeArticleText preserves literal hashes, multiplication and technical identifiers', () => {
+  const value = sanitizeArticleText('C# 与 #话题；A* 算法，2*3=6，价格 * 质量。\n\n**强调**仍可去掉标记。');
+  assert.equal(value, 'C# 与 #话题；A* 算法，2*3=6，价格 * 质量。\n\n强调仍可去掉标记。');
+});
+
 test('local document conversion produces a Markdown intermediate without network access', () => {
   const markdown = htmlToMarkdown('<h1>文章标题</h1><p>正文 <strong>重点</strong>。</p><h2>执行步骤</h2><ol><li>先准备素材</li><li>再进行排版</li></ol>');
   assert.match(markdown, /^# 文章标题/m);

@@ -28,6 +28,22 @@ export const WECHAT_LIMITS = Object.freeze({
   titleImage: TITLE_IMAGE_LIMITS
 });
 
+/** Planned upload type; the Node upload adapter must perform this conversion. */
+export function plannedWechatImageType(type = '') {
+  const normalized = String(type || '').toLowerCase();
+  if (WECHAT_LIMITS.titleImage.acceptedTypes.includes(normalized)) return normalized;
+  return ['image/svg+xml', 'image/webp', 'image/gif'].includes(normalized) ? 'image/png' : normalized;
+}
+
+export function inspectWechatAssetPlan(asset = {}) {
+  const type = plannedWechatImageType(asset.type);
+  const errors = [];
+  if (typeof asset.dataUrl !== 'string' || !asset.dataUrl.startsWith('data:')) errors.push('不是可上传的本地 Data URL');
+  if (!WECHAT_LIMITS.titleImage.acceptedTypes.includes(type)) errors.push(`格式 ${asset.type || '未知'} 不支持`);
+  if (Number(asset.size) > WECHAT_LIMITS.imageBytes) errors.push('原始图片超过 10MB，转换前需先压缩');
+  return { type, conversionRequired: type !== String(asset.type || '').toLowerCase(), errors };
+}
+
 export function charCount(value = '') {
   return [...String(value ?? '')].length;
 }

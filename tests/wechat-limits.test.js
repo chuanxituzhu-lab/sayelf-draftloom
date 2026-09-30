@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WECHAT_LIMITS, charCount, byteCount, inspectWechatArticle, inspectWechatCover, contentForWechatMeasurement } from '../src/wechat-limits.js';
+import { WECHAT_LIMITS, charCount, byteCount, inspectWechatArticle, inspectWechatCover, inspectWechatAssetPlan, plannedWechatImageType, contentForWechatMeasurement } from '../src/wechat-limits.js';
+
+test('图片预检与实际转换口径一致', () => {
+  assert.equal(plannedWechatImageType('image/svg+xml'), 'image/png');
+  assert.equal(plannedWechatImageType('image/webp'), 'image/png');
+  assert.equal(plannedWechatImageType('image/gif'), 'image/png');
+  assert.equal(inspectWechatAssetPlan({ type: 'image/svg+xml', dataUrl: 'data:image/svg+xml;base64,AA==', size: 1 }).conversionRequired, true);
+  assert.match(inspectWechatAssetPlan({ type: 'image/bmp', dataUrl: 'data:image/bmp;base64,AA==', size: 1 }).errors.join('；'), /不支持/);
+  assert.match(inspectWechatAssetPlan({ type: 'image/png', dataUrl: '/images/file.png', size: 1 }).errors.join('；'), /Data URL/);
+});
 
 test('微信字段按 Unicode 字符计数并遵守标题、作者、摘要上限', () => {
   assert.equal(charCount('😀'), 1);

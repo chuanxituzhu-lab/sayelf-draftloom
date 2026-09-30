@@ -1,4 +1,4 @@
-# Architecture — v0.4.5
+# Architecture — v0.4.6
 
 ```text
 文章 / 图片拖放 / CLI / MCP

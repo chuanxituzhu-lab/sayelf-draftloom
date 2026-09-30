@@ -1,6 +1,6 @@
 import { createInitialDocument, parseCommand, reduceDocument, VersionStore, getLayoutGuidance, generateLayoutGuidance, THEMES, normalizeTheme, getWechatLayoutVariables, renderDocumentBody, renderArticleHtml, renderInlineEmphasis } from './core.js';
 import { analyzeGrowth, getDefaultGrowthProfile, growthBrief, normalizeGrowthProfile } from './growth.js';
-import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, formatBytes } from './wechat-limits.js';
+import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, inspectWechatAssetPlan, formatBytes, plannedWechatImageType } from './wechat-limits.js';
 import { APP_VERSION } from './version.js';
 import { applyArticleEmphasis, getArticleFileKind, isSupportedArticleFile, normalizeArticleMarkdown } from './document-import.js';
 import { MAX_ARTICLE_HISTORY, removeArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from './article-history.js';
@@ -455,11 +455,7 @@ function restoreViewState(state = []) {
 function commit(intent, label) {
   const result = reduceDocument(doc, intent, selectedId);
   if (result.error) { setStatus(result.error); return false; }
-  let finalResult = result;
-  if (result.changed && !['optimizeWechat', 'autoFormat'].includes(intent.type)) {
-    const automatic = reduceDocument(result.doc, { type: 'optimizeWechat' }, result.selectedId);
-    if (automatic.changed) finalResult = { ...result, doc: automatic.doc, selectedId: automatic.selectedId, optimization: automatic.optimization, autoOptimized: true };
-  }
+  const finalResult = result;
   if (!finalResult.changed) { setStatus(intent.type === 'optimizeWechat' ? '微信发布约束检查完成，无需修改' : '没有可应用的变化'); return false; }
   selectedId = finalResult.selectedId;
   doc = store.commit(finalResult.doc, label);
@@ -482,7 +478,7 @@ function commit(intent, label) {
       ? finalResult.formatting.changes.join('；')
       : '自动排版检查完成，当前版式已经合格';
   }
-  if (intent.type === 'optimizeWechat' || finalResult.autoOptimized) {
+  if (intent.type === 'optimizeWechat') {
     const optimization = finalResult.optimization;
     statusLabel = optimization?.changes?.length ? optimization.changes.join('；') : '微信发布约束检查完成，无需修改';
   }
@@ -548,7 +544,7 @@ function render() {
   document.querySelector('#app').innerHTML = `
   <div class="shell theme-${normalizeTheme(doc.theme)}">
     <header class="topbar">
-      <div class="brand-lockup"><img class="app-logo-mark" src="/assets/draftloom-logo.svg" alt="" width="34" height="34"><span class="brand-copy"><strong>公众号排版</strong><small>Draftloom</small></span><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
+      <div class="brand-lockup"><img class="app-logo-mark" src="/assets/sayelf-logo.png" alt="SAYELF 山野精灵" width="34" height="34"><span class="brand-copy"><strong>公众号排版</strong><small>Draftloom · SAYELF</small></span><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
         <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="按文章篇幅与章节密度控制数量，识别图片内容并匹配正文章节">图片智能导入</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
@@ -563,7 +559,7 @@ function render() {
         <section><h3>版本记录</h3><div class="versions">${store.list().slice(-8).reverse().map(v=>`<div><b>#${v.seq}</b><span>${esc(v.label)}</span><time>${new Date(v.ts).toLocaleTimeString()}</time></div>`).join('')}</div></section>
       </aside>
       <section class="panel editor-panel">
-        <div id="importDrop" class="import-drop"><strong>拖入文章、DOCX、PDF 或图片，自动排版</strong><span>DOCX/PDF 在本机识别并自动清理 *、#、反引号等特殊标记；随后总结正文、生成爆款标题与标题图，导入后可继续人工调整</span></div>
+        <div id="importDrop" class="import-drop"><strong>拖入文章、DOCX、PDF 或图片，自动排版</strong><span>DOCX/PDF 在本机识别并清理 Markdown 展示标记，保留正文中的 C#、#话题等；随后提炼、排版，导入后可继续人工调整</span></div>
         ${renderWorkflowPanel()}
         <div class="command-box"><div class="command-label">文字指令</div><div class="command-row"><textarea id="commandInput" rows="1" placeholder="如：把当前改成引用 / 拆分当前段落 / 添加表格：列1|列2"></textarea><button id="runCommand">执行</button></div><div class="hint">支持按区块转换、拆分、主题切换和组件创建；表格可用换行或分号分隔；未识别的文字会作为新段落。</div></div>
         <div class="guidance-box"><div class="guidance-head"><div class="command-label">自动排版指导</div><button id="guidanceGenerateBtn" class="guidance-generate-button" type="button" title="根据当前文章自动生成章节、图片、标题和发布建议">一键生成</button></div><div id="guidanceList">${renderGuidance()}</div></div>
@@ -576,7 +572,7 @@ function render() {
         <div class="insert-row"><button data-add="heading">+ 标题</button><button data-add="paragraph">+ 段落</button><button data-add="quote">+ 引用</button><button data-add="list">+ 列表</button><button data-add="table">+ 表格</button><button data-add="cta">+ CTA</button><button data-add="gallery">+ 画廊</button><button data-add="media">+ 媒体</button></div>
       </section>
       <aside class="panel preview-panel">
-        <div class="preview-toolbar"><div><b>微信文章实时预览</b><span>仅视觉缩放，不改变内容</span></div><div class="preview-controls"><label>主题<select id="themeSelect">${Object.values(THEMES).map(theme => `<option value="${theme.id}" ${normalizeTheme(doc.theme) === theme.id ? 'selected' : ''}>${theme.label}</option>`).join('')}</select></label><button id="wechatCheckBtn" class="check-button" title="检查微信字段、正文、封面和素材，并自动优化可安全修正项">一键检测</button><div class="zoom"><button id="zoomOut">−</button><span id="zoomText">${Math.round(zoom*100)}%</span><button id="zoomIn">＋</button><button id="zoomReset">1:1</button></div></div></div>
+        <div class="preview-toolbar"><div><b>微信文章实时预览</b><span>仅视觉缩放，不改变内容</span></div><div class="preview-controls"><label>主题<select id="themeSelect">${Object.values(THEMES).map(theme => `<option value="${theme.id}" ${normalizeTheme(doc.theme) === theme.id ? 'selected' : ''}>${theme.label}</option>`).join('')}</select></label><button id="wechatCheckBtn" class="check-button" title="只检查微信字段、正文、封面和素材，不修改文章">一键检测</button><div class="zoom"><button id="zoomOut">−</button><span id="zoomText">${Math.round(zoom*100)}%</span><button id="zoomIn">＋</button><button id="zoomReset">1:1</button></div></div></div>
         <div class="phone-stage"><article class="wechat-article theme-${normalizeTheme(doc.theme)}" style="transform:scale(${zoom});${getWechatLayoutVariables(doc)}">${renderPreview()}</article></div>
       </aside>
     </main>
@@ -656,9 +652,11 @@ function getWechatDraftValidation() {
   const article = inspectWechatArticle({ title: doc.title, author: doc.author || '', digest: doc.subtitle || '', content: renderArticleHtml(doc) });
   const coverBlock = doc.blocks.find(block => block.type === 'image' && (block.visualRole === 'cover' || block.id === doc.blocks.find(item => item.type === 'image')?.id));
   const coverAsset = coverBlock ? assetById(coverBlock.assetId) : null;
-  const cover = coverAsset ? inspectWechatCover({ width: coverAsset.width, height: coverAsset.height, bytes: coverAsset.size, type: coverAsset.type, main: coverAsset.coverMain || '', sub: coverAsset.coverSub || '' }) : null;
+  const cover = coverAsset ? inspectWechatCover({ width: coverAsset.width, height: coverAsset.height, bytes: coverAsset.size, type: plannedWechatImageType(coverAsset.type), main: coverAsset.coverMain || '', sub: coverAsset.coverSub || '' }) : null;
   const coverErrors = cover ? cover.errors.map(message => ({ id: 'titleImage', label: '标题图片', message })) : [{ id: 'titleImage', label: '标题图片', message: '未插入封面图片，提交公众号草稿箱前必须设置封面' }];
-  return { ...article, cover, ok: article.ok && coverErrors.length === 0, errors: [...article.errors, ...coverErrors] };
+  const usedIds = new Set(doc.blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])].filter(Boolean)));
+  const assetErrors = doc.assets.filter(asset => usedIds.has(asset.id)).flatMap(asset => inspectWechatAssetPlan(asset).errors.map(message => ({ id: 'imageAsset', label: '文章图片', message: `${asset.name || asset.id}：${message}` })));
+  return { ...article, cover, ok: article.ok && coverErrors.length === 0 && assetErrors.length === 0, errors: [...article.errors, ...coverErrors, ...assetErrors] };
 }
 
 function renderWechatLimits(validation = getWechatDraftValidation()) {
@@ -852,23 +850,20 @@ async function autoRepairWechatConstraints(label = '一键检测与优化') {
 }
 
 async function runWechatCheck() {
-  const repair = await autoRepairWechatConstraints('一键检测与优化');
   const validation = getWechatDraftValidation();
   const guidance = getLayoutGuidance(doc);
   const errors = validation.errors || [];
   const pendingGuidance = guidance.filter(item => item.level !== 'ok').length;
   const summary = errors.length
     ? `仍有 ${errors.length} 项微信发布限制需要人工处理`
-    : repair.changed
-      ? '已自动修正可安全修正项，正文超限已完成蒸馏检查'
-      : pendingGuidance
+    : pendingGuidance
         ? `规则已通过，另有 ${pendingGuidance} 项排版建议可人工调整`
         : '当前内容符合微信发布规则';
   lastWechatCheck = { summary, at: new Date().toLocaleTimeString() };
   document.querySelectorAll('.editor-panel .wechat-limits').forEach(el => { el.outerHTML = renderWechatLimits(validation); });
   renderDraftLimitBox(validation);
   setStatus(`一键检测完成：${summary}`);
-  return { changed: repair.changed, validation: structuredClone(validation), guidance: structuredClone(guidance) };
+  return { changed: false, validation: structuredClone(validation), guidance: structuredClone(guidance) };
 }
 
 function bindLibraryEvents() {
@@ -1092,12 +1087,6 @@ async function optimizeImageFile(file){
   const dataUrl=canvas.toDataURL('image/jpeg',0.82);
   return {dataUrl,type:'image/jpeg',size:Math.round((dataUrl.length*3)/4)};
 }
-async function optimizeWechatForSubmit(){
-  const dialogWasOpen=Boolean(document.querySelector('#draftDialog')?.open);
-  const result = await autoRepairWechatConstraints('提交前智能优化微信发布约束');
-  if (dialogWasOpen && !document.querySelector('#draftDialog')?.open) document.querySelector('#draftDialog')?.showModal();
-  return result;
-}
 function exportHtml(){ const html=renderArticleHtml(doc); const blob=new Blob([html],{type:'text/html;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`wechat-layout-${doc.meta.revision}.html`;a.click();URL.revokeObjectURL(a.href);setStatus('已导出 HTML'); }
 function createDraftBundle(){
   const html=renderArticleHtml(doc);
@@ -1142,19 +1131,17 @@ function renderAuthBox(value={}){
   if (value.statusError) {
     qrBox.innerHTML=`<strong>微信接口状态读取失败</strong><p>${esc(value.statusError)}</p><small>请确认本机服务正在运行，并从当前服务地址重新打开页面。</small>`;
   } else if (value.qrAuthorization) {
-    qrBox.innerHTML=`<strong>扫码授权公众号</strong>${image}<div>${link}</div><small>${value.qrGenerated?'二维码已由本机根据授权入口自动生成。':''}扫码完成后等待本窗口自动刷新。授权适配器回调地址：${callback}</small>`;
+    qrBox.innerHTML=`<strong>扫码授权公众号</strong>${image}<div>${link}</div><small>${value.qrGenerated?'二维码已由本机根据授权入口自动生成，适配器需原样返回一次性 draftloom_state。':'图片二维码模式需适配器提交本机配置的 callback_secret。'}扫码完成后等待本窗口自动刷新。授权适配器回调地址：${callback}</small>`;
   } else if (value.remoteReady) {
     qrBox.innerHTML=`<strong>已检测到本机授权配置</strong><p>当前无需扫码：本机已加载加密保存的公众号接口配置。点击“提交到公众号草稿箱”会直接上传图片并创建草稿，完成后请在公众号后台人工审核发送。</p><small>如需改用二维码授权，请配置 WECHAT_QR_IMAGE_URL（二维码图片）或 WECHAT_QR_AUTH_URL（授权页）。</small>`;
   } else {
     const error = value.qrError ? `<p>授权入口配置无效：${esc(value.qrError)}</p>` : '';
-    qrBox.innerHTML=`<strong>尚未显示二维码</strong>${error}<p>本机不会生成无效的默认二维码。请配置真实的 WECHAT_QR_AUTH_URL（授权页）或 WECHAT_QR_IMAGE_URL（二维码图片）；配置授权页后，本机会自动把该地址生成二维码。扫码完成后仍需由授权适配器把 access_token 通过 POST 回调到本机。</p><small>本机回调地址：${callback}</small>`;
+    qrBox.innerHTML=`<strong>尚未显示二维码</strong>${error}<p>本机不会生成无效的默认二维码。请配置真实的 WECHAT_QR_AUTH_URL（授权页）或 WECHAT_QR_IMAGE_URL（二维码图片）；配置授权页后，本机会自动生成二维码。扫码后适配器需把 access_token 与一次性 draftloom_state 通过 POST 回调；图片二维码模式需另配本机回调密钥。</p><small>本机回调地址：${callback}</small>`;
   }
 }
 async function submitDraftToWechat({skipConfirm=false}={}){
   let statusEl=document.querySelector('#draftStatus');
   try {
-    await optimizeWechatForSubmit();
-    statusEl=document.querySelector('#draftStatus');
     const validation=getWechatDraftValidation();
     renderDraftLimitBox(validation);
     if(!validation.ok){ statusEl.className='draft-status local error'; statusEl.textContent=`提交已阻止：${validation.errors[0].message}`; setStatus(`草稿导出已阻止：${validation.errors[0].message}`); return; }

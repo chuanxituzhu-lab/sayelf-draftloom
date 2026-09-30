@@ -1,11 +1,13 @@
 import http from 'node:http';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { extname, join, normalize } from 'node:path';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyProtectedLocalConfig } from './scripts/local-config.mjs';
 import { extractLocalDocument, MAX_DOCUMENT_BYTES } from './scripts/document-extract.mjs';
 import { normalizeQrAuthUrl, qrDataUrlForAuthUrl } from './src/qr-auth.js';
+import { readProtectedAuth, saveProtectedAuth } from './scripts/local-auth.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 applyProtectedLocalConfig(root);
@@ -19,7 +21,44 @@ const types = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'
 };
 const json = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
-const authPath = join(root, '.local-data', 'wechat-auth.json');
+const QR_STATE_LIFETIME_MS = 10 * 60 * 1000;
+let qrChallenge = { value: '', expiresAt: 0, issued: false };
+
+function forbidden(message) {
+  const error = new Error(message);
+  error.status = 403;
+  return error;
+}
+
+function assertLocalRequest(req) {
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!/^(?:127\.0\.0\.1|localhost):\d+$/.test(host)) throw forbidden('仅允许通过本机地址访问');
+  const origin = req.headers.origin;
+  if (origin && origin !== `http://${host}`) throw forbidden('跨站请求已拒绝');
+}
+
+function publicFilePath(raw) {
+  const rel = raw === '/' ? 'index.html' : raw.replace(/^\/+/, '');
+  if (rel.includes('\\') || rel.split('/').some(part => part === '.' || part === '..')) return null;
+  const allowed = rel === 'index.html'
+    || /^src\/[a-z0-9-]+\.(?:js|css)$/i.test(rel)
+    || /^assets\/[a-z0-9-]+\.(?:png|svg)$/i.test(rel)
+    || /^node_modules\/gsap\/[a-z0-9-]+\.js$/i.test(rel);
+  return allowed ? join(root, rel) : null;
+}
+
+function sameSecret(actual, expected) {
+  const a = Buffer.from(String(actual || ''));
+  const b = Buffer.from(String(expected || ''));
+  return b.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+}
+
+function currentQrChallenge() {
+  if (!qrChallenge.value || Date.now() >= qrChallenge.expiresAt) {
+    qrChallenge = { value: randomBytes(32).toString('hex'), expiresAt: Date.now() + QR_STATE_LIFETIME_MS, issued: false };
+  }
+  return qrChallenge;
+}
 async function readJson(req) {
   let text = '';
   for await (const chunk of req) {
@@ -44,15 +83,15 @@ function requestFilename(req) {
   try { return decodeURIComponent(raw); } catch { return raw; }
 }
 async function readSavedAuth() {
-  try {
-    const saved = JSON.parse(await readFile(authPath, 'utf8'));
-    if (!saved?.access_token) return null;
-    if (saved.expires_at && Date.parse(saved.expires_at) <= Date.now() + 30_000) return null;
-    return saved;
-  } catch { return null; }
+  return readProtectedAuth(root);
 }
 async function saveAuth(input = {}) {
   if (!input.access_token || typeof input.access_token !== 'string') throw new Error('授权回调缺少 access_token');
+  const configuredAppId = process.env.WECHAT_APP_ID || process.env.WX_APPID;
+  if (configuredAppId && input.appid && input.appid !== configuredAppId) throw forbidden('公众号 AppID 与本机配置不一致');
+  const validState = qrChallenge.issued && Date.now() < qrChallenge.expiresAt && sameSecret(input.draftloom_state || input.state, qrChallenge.value);
+  const validAdapterSecret = sameSecret(input.callback_secret, process.env.WECHAT_QR_CALLBACK_SECRET);
+  if (!validState && !validAdapterSecret) throw forbidden('授权回调缺少有效的一次性 state 或适配器密钥');
   const rawExpiresIn = Number(input.expires_in || 7200);
   const expiresIn = Number.isFinite(rawExpiresIn) && rawExpiresIn > 0 ? rawExpiresIn : 7200;
   const saved = {
@@ -62,9 +101,9 @@ async function saveAuth(input = {}) {
     expires_at: new Date(Date.now() + Math.max(60, expiresIn - 60) * 1000).toISOString(),
     authorized_at: new Date().toISOString()
   };
-  await mkdir(join(root, '.local-data'), { recursive: true });
-  await writeFile(authPath, JSON.stringify(saved, null, 2), 'utf8');
-  return { authorized: true, persisted: true, expiresAt: saved.expires_at };
+  const result = saveProtectedAuth(root, saved);
+  if (validState) qrChallenge = { value: '', expiresAt: 0, issued: false };
+  return result;
 }
 
 let qrCache = { authUrl: '', imageUrl: null, error: null };
@@ -87,19 +126,25 @@ async function wechatStatus() {
   const hasAppCredentials = Boolean((process.env.WECHAT_APP_ID || process.env.WX_APPID) && (process.env.WECHAT_APP_SECRET || process.env.WX_APPSECRET));
   const rawQrAuthUrl = process.env.WECHAT_QR_AUTH_URL || '';
   const normalizedQrAuth = normalizeQrAuthUrl(rawQrAuthUrl);
-  const qrAuthUrl = normalizedQrAuth.url;
+  const qrAuthUrl = normalizedQrAuth.url ? new URL(normalizedQrAuth.url) : null;
+  if (qrAuthUrl) {
+    const challenge = currentQrChallenge();
+    challenge.issued = true;
+    qrAuthUrl.searchParams.set('draftloom_state', challenge.value);
+  }
   const qrImageUrl = process.env.WECHAT_QR_IMAGE_URL || null;
-  const generated = qrImageUrl ? { imageUrl: qrImageUrl, generated: false, error: null } : await generatedQrImage(qrAuthUrl);
+  const generated = qrAuthUrl ? await generatedQrImage(qrAuthUrl.toString()) : qrImageUrl ? { imageUrl: qrImageUrl, generated: false, error: null } : { imageUrl: null, generated: false, error: null };
+  const imageAdapterReady = Boolean(qrImageUrl && process.env.WECHAT_QR_CALLBACK_SECRET);
   return {
     remoteReady: hasToken || hasAppCredentials,
     authorized: hasToken,
     persisted: Boolean(saved?.access_token),
     expiresAt: saved?.expires_at || null,
-    qrAuthorization: Boolean(qrAuthUrl || qrImageUrl),
-    qrAuthUrl,
+    qrAuthorization: Boolean(qrAuthUrl || imageAdapterReady),
+    qrAuthUrl: qrAuthUrl?.toString() || null,
     qrImageUrl: generated.imageUrl,
     qrGenerated: generated.generated,
-    qrError: normalizedQrAuth.error || generated.error,
+    qrError: normalizedQrAuth.error || generated.error || (qrImageUrl && !qrAuthUrl && !imageAdapterReady ? '已有二维码图片模式需配置 WECHAT_QR_CALLBACK_SECRET' : null),
     callbackUrl: process.env.WECHAT_QR_CALLBACK_URL || `http://127.0.0.1:${port}/api/wechat/auth/callback`,
     mode: hasToken || hasAppCredentials ? 'wechat-api' : 'local-bundle',
     message: '授权凭据仅保存在本机 .local-data；下次启动会自动复用。配置授权入口后，二维码由本机自动生成。'
@@ -125,6 +170,7 @@ async function publishGuiDocument(doc, confirm = false) {
 
 const server = http.createServer(async (req, res) => {
   try {
+    assertLocalRequest(req);
     const raw = decodeURIComponent((req.url || '/').split('?')[0]);
     if (raw === '/api/wechat/status' && req.method === 'GET') return json(res, 200, await wechatStatus());
     if (raw === '/api/wechat/auth/callback' && req.method === 'GET') {
@@ -147,16 +193,15 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await extractLocalDocument({ buffer, filename, contentType: req.headers['content-type'] }));
     }
     if (raw === '/api/wechat/draft' && req.method === 'POST') { const body = await readJson(req); return json(res, 200, await publishGuiDocument(body.doc, body.confirm === true)); }
-    const rel = raw === '/' ? 'index.html' : raw.replace(/^\/+/, '');
-    const safe = normalize(rel).replace(/^(\.\.(\/|\\|$))+/, '');
-    const file = join(root, safe);
+    const file = publicFilePath(raw);
+    if (!file) throw new Error('not public');
     const info = await stat(file);
     if (!info.isFile()) throw new Error('not file');
     const body = await readFile(file);
-    res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     res.end(body);
   } catch (error) {
-    if ((req.url || '').startsWith('/api/')) return json(res, 400, { error: error.message });
+    if ((req.url || '').startsWith('/api/')) return json(res, error.status || 400, { error: error.message });
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Not found');
   }

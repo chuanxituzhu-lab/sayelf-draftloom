@@ -77,6 +77,16 @@ test('review blocks submission when the required cover is missing', () => {
   assert.equal(prepareWorkflowSubmission(reviewed.doc).ok, false);
 });
 
+test('review reports an overlong body without rewriting it even when autoFix is requested', () => {
+  const recognized = recognizeArticleStage({ text: `# 测试标题\n\n${'正文内容。'.repeat(4000)}`, filename: 'article.md' });
+  const before = structuredClone(recognized.doc.blocks);
+  const reviewed = reviewArticleStage(recognized.doc, { autoFix: true });
+  assert.deepEqual(reviewed.doc.blocks, before);
+  assert.equal(reviewed.report.readyForSubmit, false);
+  assert.deepEqual(reviewed.report.safeFixes, []);
+  assert.equal(reviewed.optimization, null);
+});
+
 test('submission result is recorded without storing credentials', () => {
   const result = runPublishingWorkflow({ text: source, filename: 'article.md' }, { generateImages: true, maxGenerated: 1 });
   const submitted = recordWorkflowSubmission(result.doc, { mode: 'wechat-api', status: 'submitted', draftId: 'draft-123' });

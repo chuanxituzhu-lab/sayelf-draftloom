@@ -4,7 +4,6 @@ import {
   getLayoutGuidance,
   humanizeDocument,
   importArticle,
-  optimizeWechatDocument,
   renderArticleHtml
 } from './core.js';
 import {
@@ -14,7 +13,7 @@ import {
   generateViralTitlePlan,
   validateCoreContent
 } from './visuals.js';
-import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, charCount } from './wechat-limits.js';
+import { inspectWechatArticle, inspectWechatCover, inspectWechatAssetPlan, charCount, plannedWechatImageType } from './wechat-limits.js';
 
 /**
  * The publishing workflow is deliberately a coordinator, not a second
@@ -42,7 +41,6 @@ export const WORKFLOW_CONTRACTS = Object.freeze({
 
 const DEFAULT_SUBTITLE = '自动排版草稿 · 可继续人工编辑';
 const DEFAULT_TITLE = /^(?:未命名公众号文章|未命名文章|新文章)$/;
-const IMAGE_TYPES_ACCEPTED_BY_WECHAT = new Set(WECHAT_LIMITS.titleImage.acceptedTypes.map(type => type.toLowerCase()));
 
 function now() { return new Date().toISOString(); }
 function clean(value = '') { return String(value ?? '').replace(/\s+/g, ' ').trim(); }
@@ -192,16 +190,6 @@ function recognizeExistingDocumentStage(doc = {}) {
     handoff: { accepted: source.trim().length > 0, from: 'recognize', to: 'humanize' }
   };
   return { doc: writeWorkflow(doc, 'recognize', { status: report.status, report }), report };
-}
-
-function expectedWechatImageType(asset = {}) {
-  const type = String(asset.type || '').toLowerCase();
-  if (IMAGE_TYPES_ACCEPTED_BY_WECHAT.has(type)) return type;
-  // The local renderer and existing submit adapter rasterize SVG/WebP/GIF/BMP
-  // before upload. Review the post-conversion shape instead of blocking a
-  // document that is already safe for the actual submission path.
-  if (type === 'image/svg+xml' || type === 'image/webp' || type === 'image/gif' || type === 'image/bmp') return 'image/jpeg';
-  return type;
 }
 
 /** Stage 1: local recognition and structure extraction. */
@@ -464,14 +452,9 @@ export function layoutArticleStage(doc = {}, { generateImages = true, maxGenerat
   return { doc: output, report };
 }
 
-/** Stage 5: repair safe constraints, then produce a reviewable final report. */
-export function reviewArticleStage(doc = {}, { autoFix = true } = {}) {
-  let next = clone(doc);
-  let optimization = null;
-  if (autoFix) {
-    optimization = optimizeWechatDocument(next);
-    next = optimization.doc;
-  }
+/** Stage 5: inspect only; content edits belong to explicit editing stages. */
+export function reviewArticleStage(doc = {}) {
+  const next = clone(doc);
   const article = inspectWechatArticle({
     title: next.title,
     author: next.author || '',
@@ -479,22 +462,24 @@ export function reviewArticleStage(doc = {}, { autoFix = true } = {}) {
     content: renderArticleHtml(next)
   });
   const { asset: coverAsset } = imageAssetForCover(next);
-  const conversionRequired = [...(next.assets || [])]
-    .filter(asset => asset.dataUrl && !IMAGE_TYPES_ACCEPTED_BY_WECHAT.has(String(asset.type || '').toLowerCase()))
-    .filter(asset => expectedWechatImageType(asset) === 'image/jpeg')
+  const usedAssetIds = new Set((next.blocks || []).flatMap(block => [block.assetId, ...(block.assetIds || [])].filter(Boolean)));
+  const usedAssets = (next.assets || []).filter(asset => usedAssetIds.has(asset.id));
+  const conversionRequired = usedAssets
+    .filter(asset => inspectWechatAssetPlan(asset).conversionRequired)
     .map(asset => asset.name || asset.id);
   const cover = coverAsset
     ? inspectWechatCover({
       width: coverAsset.width,
       height: coverAsset.height,
       bytes: coverAsset.size,
-      type: expectedWechatImageType(coverAsset),
+      type: plannedWechatImageType(coverAsset.type),
       main: coverAsset.coverMain || next.title || '',
       sub: coverAsset.coverSub || next.subtitle || ''
     })
     : null;
   const errors = [
     ...article.errors.map(item => ({ id: item.id, message: item.message })),
+    ...usedAssets.flatMap(asset => inspectWechatAssetPlan(asset).errors.map(message => ({ id: 'imageAsset', message: `${asset.name || asset.id}：${message}` }))),
     ...(cover ? cover.errors.map(message => ({ id: 'titleImage', message })) : [{ id: 'titleImage', message: '未设置头条封面图，提交公众号草稿前必须设置封面' }])
   ];
   const layoutGuidance = getLayoutGuidance(next);
@@ -515,7 +500,7 @@ export function reviewArticleStage(doc = {}, { autoFix = true } = {}) {
     },
     errors,
     warnings: [...new Set(warnings)],
-    safeFixes: optimization?.changes || [],
+    safeFixes: [],
     conversionRequired,
     layoutGuidance: layoutGuidance.slice(0, 8),
     handoff: { accepted: readyForSubmit, from: 'review', to: 'submit' },
@@ -526,7 +511,7 @@ export function reviewArticleStage(doc = {}, { autoFix = true } = {}) {
     workflowReview: report
   };
   const output = writeWorkflow(next, 'review', { status, report });
-  return { doc: output, report, optimization };
+  return { doc: output, report, optimization: null };
 }
 
 /** Build the local payload that the existing submit adapter can send. */

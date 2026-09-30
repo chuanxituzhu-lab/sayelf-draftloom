@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import sharp from 'sharp';
 import { normalizeWechatAsset, parseImageDataUrl } from '../scripts/wechat-media.mjs';
+import { plannedWechatImageType } from '../src/wechat-limits.js';
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="#2f7fe8"/></svg>';
 
@@ -49,4 +51,30 @@ test('leaves supported raster assets as raster assets', async () => {
   assert.equal(asset.name, 'cover.png');
   assert.equal(asset.size, 1);
   assert.equal(asset.convertedFrom, undefined);
+});
+
+test('planned WeChat type matches actual WebP and GIF conversion; unsupported BMP is blocked', async () => {
+  const source = sharp({ create: { width: 24, height: 12, channels: 3, background: '#2f7fe8' } });
+  const rowBytes = 72;
+  const bmp = Buffer.alloc(54 + rowBytes * 12);
+  bmp.write('BM', 0, 'ascii');
+  bmp.writeUInt32LE(bmp.length, 2);
+  bmp.writeUInt32LE(54, 10);
+  bmp.writeUInt32LE(40, 14);
+  bmp.writeInt32LE(24, 18);
+  bmp.writeInt32LE(12, 22);
+  bmp.writeUInt16LE(1, 26);
+  bmp.writeUInt16LE(24, 28);
+  bmp.writeUInt32LE(rowBytes * 12, 34);
+  for (const [format, type] of [['webp', 'image/webp'], ['gif', 'image/gif']]) {
+    const bytes = await source.clone().toFormat(format).toBuffer();
+    const asset = await normalizeWechatAsset({ name: `example.${format}`, type, dataUrl: `data:${type};base64,${bytes.toString('base64')}` });
+    assert.equal(plannedWechatImageType(type), 'image/png');
+    assert.equal(asset.type, 'image/png');
+    assert.equal(asset.name, 'example.png');
+    assert.equal(asset.width, 24);
+    assert.equal(asset.height, 12);
+  }
+  assert.equal(plannedWechatImageType('image/bmp'), 'image/bmp');
+  await assert.rejects(normalizeWechatAsset({ name: 'example.bmp', type: 'image/bmp', dataUrl: `data:image/bmp;base64,${bmp.toString('base64')}` }), /暂不支持 image\/bmp/);
 });

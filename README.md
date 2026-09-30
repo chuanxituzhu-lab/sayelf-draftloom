@@ -1,6 +1,6 @@
-# Draftloom 公众号自动排版 v0.4.5
+# Draftloom 公众号自动排版 v0.4.6
 
-把 Markdown、TXT、DOCX、PDF 文章导入后，先在本机统一转换为 Markdown 中间稿，再按**识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交**工作流处理：完成本地识别、清理特殊符号、正文自然化、提炼核心、智能排版、生成封面、手机预览，最后导出微信 HTML 或提交到公众号草稿箱。DOCX 优先调用 Microsoft 开源 MarkItDown 本地转换，未安装时回退到 Mammoth + Turndown；原始输入信息和 Markdown 中间稿保留用于回退。WebUI 顶部使用 Draftloom 本地 Logo，浏览器标签页也复用同一图标；新增“微信官方深色”可选视觉系统：深色底、绿色结构锚点、局部重点和居中留边的图片卡片。WebUI 预留共享 GSAP Motion Layer，需要动效时直接调用，不新增 Skill，也不把动效逻辑散落到各功能模块。
+把 Markdown、TXT、DOCX、PDF 文章导入后，先在本机统一转换为 Markdown 中间稿，再按**识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交**工作流处理：完成本地识别、清理特殊符号、正文自然化、提炼核心、智能排版、生成封面、手机预览，最后导出微信 HTML 或提交到公众号草稿箱。DOCX 优先调用 Microsoft 开源 MarkItDown 本地转换，未安装时回退到 Mammoth + Turndown；原始输入信息和 Markdown 中间稿保留用于回退。WebUI 顶部使用本地植入的 SAYELF 山野精灵 Logo，浏览器标签页也复用同一图标；新增“微信官方深色”可选视觉系统：深色底、绿色结构锚点、局部重点和居中留边的图片卡片。WebUI 预留共享 GSAP Motion Layer，需要动效时直接调用，不新增 Skill，也不把动效逻辑散落到各功能模块。
 
 适合需要稳定发布公众号文章，但不想反复复制、调整格式、找图片和改封面的人。
 
@@ -50,11 +50,11 @@ $env:PORT="4177"; npm start
 
 ## 最新版本下载
 
-当前本地工作版本：**v0.4.5**；GitHub 最新公开版本：**v0.4.5**
+当前本地工作版本：**v0.4.6**；GitHub 最新公开版本：**v0.4.6**
 
 - [打开 GitHub 仓库](https://github.com/chuanxituzhu-lab/sayelf-draftloom)
-- [下载 v0.4.5 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.5.zip)
-- [查看 v0.4.5 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.5/skill/SKILL.md)
+- [下载 v0.4.6 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.6.zip)
+- [查看 v0.4.6 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.6/skill/SKILL.md)
 
 源码 ZIP 已包含最新 Skill、WebUI、命令行工具和本地工作流；本地独立导出包仍保存在 `.local-data/exports/`，不上传到公开仓库。
 
@@ -62,7 +62,7 @@ $env:PORT="4177"; npm start
 
 - **自动识别文章**：支持 Markdown、TXT、DOCX、PDF；DOCX 优先由 Microsoft 开源 MarkItDown 转为 Markdown，未安装时回退到 Mammoth→Turndown，PDF/TXT 也统一进入 Markdown 中间稿。
 - **自动调用转换器**：按文件类型自动选择 DOCX→MarkItDown（不可用时 Mammoth→Turndown）、PDF→本地文本→Markdown、MD/TXT→规范化；无需再次点击转换，失败会明确停在识别阶段。
-- **自动清理格式**：去除 `*`、`#`、反引号等 Markdown/排版标记，保留正文内容。
+- **自动清理格式**：只清除 Markdown 强调、代码、标题、引用和列表的展示标记；正文里的 `C#`、`A*`、`2*3` 和 `#话题` 等符号会保留。
 - **自动提炼核心**：生成 `CoreContent v1`，分开提取主题、问题、方法、结论、关键词和正文证据句，再生成标题候选、摘要和封面文案。
 - **自动排版指导**：一键生成章节层级、图片位置与内容、爆款标题、综合建议；每条建议都保留“带入指令”。
 - **自动匹配图片**：按文章长度、章节密度和图片语义安排正文配图，不会无上限塞图。
@@ -98,13 +98,15 @@ $env:PORT="4177"; npm start
 
 - 配置 `WECHAT_QR_AUTH_URL`：本机根据授权入口生成二维码。
 - 配置 `WECHAT_QR_IMAGE_URL`：直接显示已有二维码。
-- 授权适配器扫码完成后，将 `access_token` POST 到本机回调地址。
+- 授权页二维码会附带 10 分钟一次性 `draftloom_state`；适配器扫码完成后，向本机回调地址 POST `access_token` 和原样返回的 `draftloom_state`。若直接使用 `WECHAT_QR_IMAGE_URL`，需在本机配置 `WECHAT_QR_CALLBACK_SECRET`，由适配器在 POST 中提交 `callback_secret`。不要将密钥放进二维码或公开仓库。
+- Windows 上回调 Token 使用当前用户 DPAPI 加密保存在 `.local-data`；旧版明文凭据在读取时迁移。未配置真实适配器时，官方接口不会凭空生成可用的扫码授权。
 
 微信官方草稿接口本身不提供扫码登录；没有真实授权入口时，系统不会生成无效二维码。
 
 ## 隐私与安全
 
 - 文章、图片、原稿、素材库和授权配置默认只在本机处理。
+- WebUI 仅开放必要的静态资源；私有文件不经 HTTP 提供。审核/检测/提交不静默改写正文，超限时先返回错误，再由用户显式选择优化。
 - `.local-data/` 已加入 Git 忽略，不会提交到 GitHub。
 - AppSecret、Token、私钥、个人信息、IP 地址和本地文章不会写入公开代码或 README。
 - DOCX/PDF 识别默认走本机 `127.0.0.1`；扫描版 PDF 当前暂不包含 OCR。
@@ -223,9 +225,17 @@ npm start
 - 三级标题采用绿色视觉锚点，正文截图统一使用 88% 最大宽度的深色图片卡片，预览与微信导出 HTML 同步生效。
 - 更新 `skill/SKILL.md`、`SKILL.md` 与 `docs/visual-system.md`，记录参考边界、设计决策和可验证规则。
 
+## v0.4.6 更新内容
+
+- 本机 WebUI 改为静态文件白名单，私有配置、脚本和 Git 元数据不能经页面服务器读取。
+- 扫码回调校验一次性状态；Windows 将授权 Token 用当前用户 DPAPI 加密，读取旧凭据时自动迁移。
+- 检测、审核和提交不再暗中改写文章；正文超限会明确阻止并提示，优化仍由用户主动执行。
+- Markdown 清理保留技术文本和标签中的字面符号；SVG/WebP/GIF 上传前转 PNG，BMP 等无法转换的格式提前阻止。
+- 为上述路径增加回归测试，并同步本地与 GitHub 下载入口。
+
 ## v0.4.5 更新内容
 
-- WebUI 顶部植入本地 Draftloom Logo，浏览器标签页复用同一 SVG 图标，不依赖外部图片。
+- WebUI 顶部植入本地 SAYELF 山野精灵 Logo，浏览器标签页复用同一 PNG 图标，不依赖外部图片。
 - 导入 DOCX 时自动优先调用 Microsoft 开源 MarkItDown 的本地流式转换；未安装时回退到 Mammoth→Turndown。
 - PDF/TXT/Markdown 统一进入本地 Markdown 中间稿，保留原始输入边界，转换失败停在识别阶段并给出原因。
 - 增加转换适配器、Logo 资产和自动调用规则的测试与 Skill 契约说明。
