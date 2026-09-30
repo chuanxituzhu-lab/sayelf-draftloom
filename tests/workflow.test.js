@@ -157,5 +157,9 @@ test('WebUI binds both one-click 1-4 buttons without duplicate IDs', async () =>
   assert.match(appSource, /文章仅在本机处理/);
   assert.match(appSource, /id="draftStatus" role="status" aria-live="polite"/);
   assert.match(appSource, /提交成功！文章已进入微信公众号草稿箱/);
+  assert.match(appSource, /id="submissionToast" role="status" aria-live="assertive"/);
+  assert.match(appSource, /function showSubmissionToast\(receipt = \{\}\)/);
+  assert.match(appSource, /previousSubmission\?\.status === 'submitted'/);
+  assert.match(appSource, /showSubmissionToast\(result\.delivery\)/);
   assert.match(appSource, /submitButton\.disabled=true/);
 });

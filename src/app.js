@@ -20,6 +20,7 @@ let selectedId = doc.blocks[0]?.id || null;
 let zoom = 1;
 let store = new VersionStore(doc);
 let status = '就绪';
+let submissionToastDismissed = false;
 let libraryTab = 'mine';
 let assetQuery = '';
 let assetSort = 'recent';
@@ -556,6 +557,17 @@ function autoOptimizeLoadedDocument(){
   return automatic.optimization;
 }
 
+function showSubmissionToast(receipt = {}) {
+  if (submissionToastDismissed) return;
+  const toast = document.querySelector('#submissionToast');
+  const text = document.querySelector('#submissionToastText');
+  if (!toast || !text) return;
+  const draftId = receipt.draftId ? `（草稿编号：${receipt.draftId}）` : '';
+  text.textContent = `✓ 提交成功！文章已进入微信公众号草稿箱${draftId}。${receipt.nextAction || '请在公众号后台人工审核后发送。'}`;
+  toast.style.display = 'flex';
+  toast.hidden = false;
+}
+
 function render() {
   const viewState = captureViewState();
   document.querySelector('#app').innerHTML = `
@@ -594,9 +606,12 @@ function render() {
       </aside>
     </main>
     <footer class="statusbar"><span id="statusText" role="status" aria-live="polite">${esc(status)}</span><span id="revisionText">v${doc.meta.revision} · ${new Date(doc.meta.updatedAt).toLocaleTimeString()}</span></footer>
+    <div id="submissionToast" role="status" aria-live="assertive" aria-atomic="true" hidden style="position:fixed;z-index:3000;top:72px;left:50%;transform:translateX(-50%);align-items:center;gap:18px;width:min(720px,calc(100vw - 32px));padding:16px 18px;border:1px solid #a7dfbd;border-radius:12px;background:#effaf3;color:#146c3b;box-shadow:0 12px 36px rgba(20,70,42,.2);font-size:14px;font-weight:650;line-height:1.5"><span id="submissionToastText"></span><button id="submissionToastClose" type="button" aria-label="关闭提交成功提示" style="flex:0 0 auto;border:0;background:transparent;color:#146c3b;font-size:20px;padding:0 3px">×</button></div>
     <dialog id="draftDialog"><form method="dialog" class="draft-dialog"><div class="draft-dialog-head"><div><strong>导出到微信草稿箱</strong><p>先生成微信兼容草稿包，再按授权配置提交到公众号草稿箱。</p></div><button value="cancel" aria-label="关闭">×</button></div><div class="draft-status" id="draftStatus" role="status" aria-live="polite" aria-atomic="true">正在检查本机授权配置…</div><div id="draftLimitBox"></div><div id="qrAuthBox" class="qr-auth" hidden></div><div class="draft-note"><b>授权说明</b><span>二维码由已配置的授权适配器提供；扫码完成后，适配器只需向本机回调地址提交凭据。凭据保存在本机 .local-data，下次启动自动复用。</span></div><div class="draft-actions"><button id="localDraftBtn" type="button">仅生成本地草稿包</button><button id="submitDraftBtn" type="button" class="primary-button">提交到公众号草稿箱</button></div><div class="draft-foot">草稿包由系统自动生成，普通编辑无需处理 JSON。</div></form></dialog>
   </div>`;
   bindEvents();
+  const previousSubmission = getWorkflowState(doc).stages.submit.report;
+  if (previousSubmission?.status === 'submitted') showSubmissionToast(previousSubmission);
   restoreViewState(viewState);
   void syncPreviewCover();
 }
@@ -1064,7 +1079,9 @@ function bindEvents() {
   document.querySelector('#viralTitleBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:false,maxGenerated:0,titleMode:'viral',forceTitle:true},'生成爆款标题');
   document.querySelectorAll('[data-title-candidate]').forEach(el=>el.onclick=()=>commit({type:'setTitle',text:el.dataset.titleCandidate},'采用标题候选'));
   document.querySelector('#localDraftBtn').onclick=()=>{exportDraftBundle();document.querySelector('#draftDialog')?.close();};
-  document.querySelector('#submitDraftBtn').onclick=submitDraftToWechat;  document.querySelector('#exportHtmlBtn').onclick=exportHtml;
+  document.querySelector('#submitDraftBtn').onclick=submitDraftToWechat;
+  document.querySelector('#submissionToastClose').onclick=()=>{submissionToastDismissed=true;document.querySelector('#submissionToast').hidden=true;};
+  document.querySelector('#exportHtmlBtn').onclick=exportHtml;
   document.querySelector('#articleImportInput').onchange=e=>handleArticleImport(e.target.files);
    document.querySelector('#clearArticleBtn').onclick=clearCurrentArticle;
   const drop = document.querySelector('#importDrop');
@@ -1209,6 +1226,8 @@ async function submitDraftToWechat({skipConfirm=false}={}){
       const nextAction=esc(result.delivery?.nextAction||'请在微信公众号后台人工审核后发送');
       statusEl.className='draft-status ready success';
       statusEl.innerHTML=`<strong>✓ 提交成功！文章已进入微信公众号草稿箱</strong><span>已收到微信接口的成功回执</span><small>${idText}<br>${nextAction}</small>`;
+      submissionToastDismissed=false;
+      showSubmissionToast(result.delivery);
       doc = recordWorkflowSubmission(doc, result.delivery);
       persist();
       refreshWorkflowPanel();

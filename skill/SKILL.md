@@ -3,7 +3,7 @@ name: wechat-layout
 description: Run a local-first Chinese WeChat Official Account publishing workflow with DOCX/PDF text extraction, special-marker cleanup, optional humanization, content distillation, deterministic layout, reference-derived visual systems, WeChat review, explicit draft submission, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、内容提炼、去 AI 味、发布审核、图片插入、视觉主题或本地预览。
 ---
 
-# 公众号排版 Skill — v0.4.7
+# 公众号排版 Skill — v0.4.8
 
 ## Purpose
 
