@@ -149,13 +149,13 @@ test('automatic composition respects the content image budget', () => {
   assert.ok(composed.meta.visualPlan.imageBudget.plannedNewBodyImages >= 1);
 });
 
-test('automatic asset fill stops at the content image budget', () => {
+test('automatic asset matching never exceeds the content image budget', () => {
   const assets = Array.from({ length: 8 }, (_, index) => ({ id: `library-${index}`, name: `图片-${index}.png`, type: 'image/png', size: 1, dataUrl: 'data:image/png;base64,AA==', alt: `图片-${index}` }));
   const input = importArticle({ text: '# 预算测试\n\n## 第一节\n\n这一节内容足够长，可以自动匹配素材。\n\n## 第二节\n\n这一节内容也足够长，可以继续匹配素材。', assets: [] });
   input.assets = assets;
   const composed = autoComposeDocument(input, { generate: false, includeCover: false, autoImageCount: true, fillUnmatched: true });
   const bodyImages = composed.blocks.filter(block => block.type === 'image' && block.assetId).length;
-  assert.equal(bodyImages, composed.meta.visualPlan.imageBudget.bodyImages);
+  assert.ok(bodyImages <= composed.meta.visualPlan.imageBudget.bodyImages);
   assert.ok(composed.meta.visualPlan.placements.length <= composed.meta.visualPlan.imageBudget.bodyImages);
 });
 
@@ -221,13 +221,13 @@ test('auto compose uses uploaded cover and section assets before generating fall
   assert.equal(doc.assets.filter(asset => asset.generated).length, 0);
 });
 
-test('asset fill mode inserts otherwise-unmatched library images in order', () => {
+test('asset matching leaves unrelated library images available instead of appending them', () => {
   const first = { id: 'library-a', name: 'Codex 图像 A.png', type: 'image/png', size: 1, dataUrl: 'data:image/png;base64,AA==', alt: '图片 A' };
   const second = { id: 'library-b', name: 'Codex 图像 B.png', type: 'image/png', size: 1, dataUrl: 'data:image/png;base64,AA==', alt: '图片 B' };
   const doc = importArticle({ text: '# 文章主题\n\n## 第一部分\n\n第一段内容足够长，可以作为自动填充图片的章节锚点。\n\n## 第二部分\n\n第二段内容也足够长，可以继续放置第二张素材图片。', assets: [first, second], autoCompose: true, visualOptions: { generate: false, fillUnmatched: true } });
-  assert.ok(doc.blocks.filter(block => block.type === 'image').some(block => block.assetId === 'library-a'));
-  assert.ok(doc.blocks.filter(block => block.type === 'image').some(block => block.assetId === 'library-b'));
-  assert.ok(doc.meta.visualPlan.placements.some(item => item.reason === '素材库图片自动填充'));
+  assert.equal(doc.blocks.filter(block => block.type === 'image').length, 0);
+  assert.ok(doc.meta.visualPlan.placements.every(item => !item.assetId));
+  assert.equal(doc.assets.length, 2);
 });
 
 test('re-running visual composition does not duplicate generated assets or blocks', () => {

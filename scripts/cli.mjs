@@ -11,6 +11,7 @@ import { applyProtectedLocalConfig } from './local-config.mjs';
 import { readProtectedAuth } from './local-auth.mjs';
 import { normalizeWechatAsset, parseImageDataUrl } from './wechat-media.mjs';
 import { extractLocalDocument } from './document-extract.mjs';
+import { verifyWechatDraftResponse } from '../src/wechat-response.js';
 import { distillArticleStage, getWorkflowState, humanizeArticleStage, layoutArticleStage, recordWorkflowSubmission, reviewArticleStage, runPublishingWorkflow, skipHumanizeArticleStage } from '../src/workflow.js';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -361,8 +362,9 @@ async function publishFromState({ allowRemote = false } = {}) {
     const response = await fetchWechat(`${endpoint}${joiner}access_token=${encodeURIComponent(token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ articles: [payload] }) }, '提交微信草稿');
     const responseText = await response.text();
     let parsedResponse = null; try { parsedResponse = JSON.parse(responseText); } catch {}
-    const apiFailed = !response.ok || (parsedResponse && Number(parsedResponse.errcode || 0) !== 0);
-    const draftId = parsedResponse?.media_id || parsedResponse?.draft_id || null;
+    const verifiedDraft = verifyWechatDraftResponse(response.ok, parsedResponse);
+    const apiFailed = !verifiedDraft.ok;
+    const draftId = verifiedDraft.draftId;
     delivery = {
       mode: 'wechat-api',
       status: apiFailed ? 'failed' : 'submitted',
@@ -372,10 +374,10 @@ async function publishFromState({ allowRemote = false } = {}) {
       backend_url: 'https://mp.weixin.qq.com/ （登录后进入「草稿箱」查看）',
       reviewRequired: !apiFailed,
       nextAction: apiFailed ? null : '请在微信公众号后台人工审核后发送',
-      error: apiFailed ? describeWechatError(parsedResponse || {}) : null,
+      error: apiFailed ? (parsedResponse?.errcode ? describeWechatError(parsedResponse) : verifiedDraft.reason) : null,
       response: responseText.slice(0, 500)
     };
-    if (apiFailed) throw new Error(`微信草稿接口失败：${describeWechatError(parsedResponse || {}) || response.status}`);
+    if (apiFailed) throw new Error(`微信草稿接口失败：${delivery.error || response.status}`);
   } else if (endpoint && !token) {
     delivery = { mode: 'local-bundle', status: 'ready', warning: '已生成草稿包；未检测到 WECHAT_ACCESS_TOKEN，未调用远程接口' };
   }  await writeFile(htmlPath, html, 'utf8');

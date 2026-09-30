@@ -3,7 +3,7 @@ name: wechat-layout
 description: Run a local-first Chinese WeChat Official Account publishing workflow with DOCX/PDF text extraction, special-marker cleanup, optional humanization, content distillation, deterministic layout, reference-derived visual systems, WeChat review, explicit draft submission, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、内容提炼、去 AI 味、发布审核、图片插入、视觉主题或本地预览。
 ---
 
-# 公众号排版 Skill — v0.4.6
+# 公众号排版 Skill — v0.4.7
 
 ## Purpose
 
@@ -18,7 +18,7 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 3. `distillArticleStage`：基于已接受的正文生成 `CoreContent v1`（主题、问题、方法、结论、关键词和关键证据句）、内容概要、标题候选和来源元数据；默认不改写正文，人工标题不会被覆盖。
 4. `layoutArticleStage`：统一字体、字号、行距、段距和标题层级，拆分过长段落，局部标注重点，并按章节密度安排图片/封面。
 5. `reviewArticleStage`：只读检查标题、作者、摘要、正文字符/大小、封面、图片和 HTML；正文不会被审核静默改写，错误与建议都保留在报告中。
-6. `prepareWorkflowSubmission` + 现有提交适配器：生成微信 payload；只有用户显式确认且授权可用时，才上传图片并创建草稿，绝不代替后台群发。
+6. `prepareWorkflowSubmission` + 现有提交适配器：生成微信 payload；只有用户显式确认且授权可用时，才上传图片并创建草稿，绝不代替后台群发。仅微信返回有效草稿编号后显示提交成功；GUI 提交中防重复点击，并在草稿面板与状态栏显示结果。
 
 `runPublishingWorkflow` 负责按依赖串联本地阶段并准备提交，不直接产生网络副作用。工作流状态写入 `doc.meta.workflow`：每个阶段都有 `status`、`at`、`report` 和 handoff；自然化预览会停在人工闸门，应用后自动让提炼、排版、审核和提交结果失效；阶段转换、检查点和证据写入本地 ledger，提交结果通过 `recordWorkflowSubmission` 写回。
 
@@ -68,11 +68,12 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 - 导入或编辑时，普通段落保持原样；重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号只在对应文字范围内加粗或加浅色标记，状态可随文章版本一起回滚。
 - `generateTitleImage`：本地提炼文章核心内容，生成一张 900×383 标题图片并写入素材库，标题和摘要仍可人工修改。
 - `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})`：先按正文篇幅与章节密度计算正文配图预算，再识别图片文件名、描述以及可选的 OCR/视觉标签，将素材/本地创意图插入分布均匀的章节；`fillUnmatched:true` 也遵守预算，不会把剩余素材库图片无上限追加。每个匹配图片区块会记录置信度、命中关键词、内容标签和识别来源，生成结果可人工替换、移动或删除。`forceTitle:true` 仅用于用户主动点击“生成爆款标题”，人工编辑过的标题默认锁定。
+- 图片入库后若已有正文，会自动在本机匹配封面与章节位置；匹配依据限于文件名、替代文字及已有描述、标签或 OCR，不调用云端视觉识别。没有足够语义证据的图片保留在素材库，不插入文章末尾；匹配后须检查预览，可撤销、移动或替换。
 - `coverSet()`：根据封面与内容摘要设置区，优先复用素材库中的合规封面，置为文章首图，并依据核心提炼结果同步摘要、封面主文案和副文案；若没有合规封面才生成一个可替换候选，不重复导入已有素材。`smartCover()` 作为内部兼容别名保留。
 - 扫码授权：配置真实 `WECHAT_QR_AUTH_URL` 后由本机自动渲染附带一次性 `draftloom_state` 的二维码，适配器回调时必须原样返回该状态；单独使用 `WECHAT_QR_IMAGE_URL` 时，本机必须配置 `WECHAT_QR_CALLBACK_SECRET`，回调提交 `callback_secret`。Windows 将回调 Token 用当前用户 DPAPI 加密保存在 `.local-data`。
 - GUI 的“公众号封面与内容摘要”独立设置区提供封面素材选择、900×383 头条预览、主/副文案（10/14 字）和内容摘要（128 字）编辑；手工封面文案会锁定，重新执行智能设置可解除锁定并按正文重算。
 - “我的素材”图片卡片可直接拖入“头条封面”替换，保留封面下拉选择和“封面一键设置”；SVG 拖入后沿用提交前本地 PNG/JPEG 转换。
-- GUI 的“自动排版指导”提供“一键生成”：一次完成标题/配图编排，并本地分组生成章节层级、图片位置/内容、爆款标题和综合建议；每条结果保留“带入指令”作人工微调，不会未经确认直接修改正文。
+- GUI 的“自动排版指导”提供“一键生成”：本机完成版式和标题/配图编排后，按微信兼容 HTML 检查字符数与 UTF-8 字节数；本地图片 Data URL 预检时按每张图 480 字符的保守链接空间计量，避免上传后链接长度未知导致临界超限。上传后再用微信返回的真实图片 URL 对同一 HTML 执行最终校验，只有通过才调用草稿接口。确实超限时再蒸馏正文，并同步摘要/封面文案。压缩前原稿受保护，可撤销/恢复；未通过校验时如实报告剩余项，不假报成功。文章默认不发送外部 AI 平台；每条指导仍保留“带入指令”。
 - 微信草稿提交：文章使用的 SVG、WebP、GIF 图片在本机提交前自动转换为 PNG；BMP 等无法转换的格式提前阻止，预览和原始素材不变。审核、检测、导出和提交都不会静默改写正文；“智能优化发布约束”由用户主动触发。
 - GUI 与 CLI 会区分本机连接失败、文档识别失败、微信图片上传失败和草稿接口失败，显示具体处理阶段与下一步，不再只显示 `fetch failed`。
 - `optimizeWechat()`：按共享微信限制智能蒸馏正文，并同步优化标题、作者、内容摘要、封面主/副文案；预览按“封面 → 标题 → 作者/时间 → 内容摘要 → 正文”动态重排，结果可通过 undo/redo 回滚。

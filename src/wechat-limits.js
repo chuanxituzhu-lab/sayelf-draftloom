@@ -28,6 +28,11 @@ export const WECHAT_LIMITS = Object.freeze({
   titleImage: TITLE_IMAGE_LIMITS
 });
 
+// Upload URL lengths are not known until WeChat returns them. Reserve a
+// deliberately roomy URL slot during local optimization; the exact returned
+// HTML is validated again immediately before draft/add.
+const WECHAT_IMAGE_URL_RESERVATION = `https://mmbiz.qpic.cn/${'x'.repeat(480)}`;
+
 /** Planned upload type; the Node upload adapter must perform this conversion. */
 export function plannedWechatImageType(type = '') {
   const normalized = String(type || '').toLowerCase();
@@ -63,9 +68,10 @@ export function truncateByChars(value = '', max = 0) {
 
 export function contentForWechatMeasurement(value = '') {
   // The GUI stores local images as Data URLs, while draft/add receives
-  // mmbiz-hosted URLs after the upload step. Measure the post-upload shape so
-  // a large local Base64 string does not create a false body-size failure.
-  return String(value ?? '').replace(/data:[^"'\s)]+;base64,[A-Za-z0-9+/=]+/g, 'https://mmbiz.qpic.cn/image');
+  // mmbiz-hosted URLs after the upload step. Match to the enclosing attribute
+  // quote (not `)` or whitespace inside SVG payloads), covering both Base64
+  // and percent-encoded SVG Data URLs before they are rasterized and uploaded.
+  return String(value ?? '').replace(/((?:src|href)\s*=\s*["'])data:[^"']*(["'])/gi, `$1${WECHAT_IMAGE_URL_RESERVATION}$2`);
 }
 
 export function inspectWechatCover({ width = 0, height = 0, bytes = 0, type = '', kind = 'headline', main = '', sub = '' } = {}) {

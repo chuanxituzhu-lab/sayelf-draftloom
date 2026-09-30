@@ -7,7 +7,7 @@ metadata:
 
 # 公众号自动排版（sayelf-draftloom）
 
-基于 draftloom（本地优先的公众号文章工作流与排版工具，v0.4.6）实现文字稿件到微信草稿的可回退流水线。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。DOCX 在本机优先调用 Microsoft 开源 MarkItDown，未安装时回退到 Mammoth + MIT Turndown；PDF/TXT 也统一进入本地 Markdown 中间稿，仅清理 Markdown 展示标记，保留 `C#`、`A*`、`2*3`、话题标签等正文字符；扫描版 PDF 暂不做 OCR。WebUI 预留共享 GSAP Motion Layer，动效按需直接调用，不新增独立 Skill。
+基于 draftloom（本地优先的公众号文章工作流与排版工具，v0.4.7）实现文字稿件到微信草稿的可回退流水线。本仓库根目录即完整工具源码，克隆后可直接作为 WorkBuddy 技能使用。DOCX 在本机优先调用 Microsoft 开源 MarkItDown，未安装时回退到 Mammoth + MIT Turndown；PDF/TXT 也统一进入本地 Markdown 中间稿，仅清理 Markdown 展示标记，保留 `C#`、`A*`、`2*3`、话题标签等正文字符；扫描版 PDF 暂不做 OCR。WebUI 预留共享 GSAP Motion Layer，动效按需直接调用，不新增独立 Skill。
 
 ## 安装（WorkBuddy）
 
@@ -103,13 +103,13 @@ npm start   # 浏览器打开 http://127.0.0.1:4173
 - `distillArticleStage` 输出 `CoreContent v1`：`thesis/topic/problem/method/conclusion/keywords/keySentences`，并固定标记 `epistemic: inference`、`localOnly: true`；`keySentences` 保留正文原句、类型和位置，原文未明确表达的问题/方法/结论保持 `null`。
 - 标题/摘要使用独立元数据记录 `titleSource`、`digestSource`、`contentSource`、`bodyRewritten`、`requiresReview` 和 `localOnly`；提炼只读当前已接受正文，不把 CoreContent 当第二篇文章，不静默改写正文。
 - CoreContent 交给排版前必须通过 `validateCoreContent`；失败时停在本地提炼边界，不把不完整结果交给下游。未来 AI Harness 只能作为显式、可替换适配器，必须返回相同 schema，仍需本机校验和人工复核。
-- `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})` 会按正文篇幅与章节密度自动计算正文配图预算，再将本地素材或创意图放到分布均匀的章节位置；`fillUnmatched:true` 也遵守预算，不会把素材库图片无上限追加到文章。
+- `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})` 会按正文篇幅与章节密度自动计算正文配图预算，再依据本地文件名、替代文字及已有描述/标签/OCR 语义匹配素材到封面和章节位置；低置信图片留在素材库，不硬塞到正文末尾。上传素材时若已有正文会自动执行匹配，用户可检查预览并撤销、移动或替换；不调用云端视觉识别。
 - `autoFormatDocument(doc)` 是本地确定性排版核心：统一安全字体栈、字号、行距、段距和标题层级；将过长段落按句子边界拆分；仅保留识别到的重点、金句和编号局部标注。选择“微信官方深色”时，正文默认 15px/2.02 倍行距，二级标题使用绿色锚线，三级标题使用绿色文字，正文图片使用 88% 最大宽度的深色图片卡片。规则不会改写原稿语义，Document State 经过 VersionStore 后支持回滚。
 - `runPublishingWorkflow(input, options)` 是工作流编排核心：`recognizeArticleStage` 只识别并结构化，`humanizeArticleStage` 是可选的“预览→人工确认→应用”正文节点，`distillArticleStage` 生成 CoreContent v1/标题/概要/关键词及校验元数据，`layoutArticleStage` 负责排版与图片位置，`reviewArticleStage` 只读检查微信规则且不改正文，`prepareWorkflowSubmission` 只准备草稿 payload。每阶段报告写入 `meta.workflow`，阶段契约、检查点和本地证据记录在同一文档状态中，上游重跑会把下游标记为 `stale`。
 - 工作流默认在本机执行，去 AI 味预览不修改正文，应用后通过 VersionStore 产生新版本并要求下游重新验收；提炼不静默改写正文，审核保留错误与人工建议；`submit` 只是显式确认后的最后动作，远程授权和上传仍隔离在现有提交适配器中。
-- “自动排版指导”支持“一键生成”：一次完成标题/配图编排，并在本机按章节层级、图片位置/内容、爆款标题和综合建议分组生成指导；每条结果保留“带入指令”作人工微调，不会未经确认直接改写正文。
+- “自动排版指导”支持“一键生成”：本机完成版式和标题/配图编排后，按微信兼容 HTML 检查字符数与 UTF-8 字节数；本地图片 Data URL 预检时按每张图 480 字符的保守链接空间计量，避免上传后链接长度未知导致临界超限。上传后再用微信返回的真实图片 URL 对同一 HTML 执行最终校验，只有通过才调用草稿接口。确实超限时再蒸馏正文，并同步摘要/封面文案。压缩前原稿受保护，可撤销/恢复；未通过校验时如实报告剩余项，不假报成功。文章默认不发送外部 AI 平台；每条指导仍保留“带入指令”。
 - WebUI 顶部与浏览器标签页使用本地植入的 SAYELF 山野精灵 PNG Logo，不依赖外部图片。
-- `publish` 默认只生成本地交付包，不上传。仅当显式配置 `WECHAT_ACCESS_TOKEN`（或 `WECHAT_APP_ID` + `WECHAT_APP_SECRET`）后才提交远程草稿；提交微信前，本机会把文章使用的 SVG/WebP/GIF 图片转换为 PNG 上传，BMP 等不支持格式直接阻断，编辑器中的原始图片不变；Token 不写入文档或输出。扫码授权需要真实适配器：`WECHAT_QR_AUTH_URL` 的二维码附带一次性 `draftloom_state`，适配器 POST 回调时必须原样返回；`WECHAT_QR_IMAGE_URL` 模式需本机 `WECHAT_QR_CALLBACK_SECRET` 并在回调中提交 `callback_secret`。Windows 回调凭据以当前用户 DPAPI 加密；微信官方草稿接口本身不提供扫码登录。
+- `publish` 默认只生成本地交付包，不上传。仅当显式配置 `WECHAT_ACCESS_TOKEN`（或 `WECHAT_APP_ID` + `WECHAT_APP_SECRET`）后才提交远程草稿；仅在微信返回有效草稿编号后标记成功，响应缺失或不完整按失败处理；GUI 提交中禁用按钮防止重复创建，并显示可访问的成功回执。提交微信前，本机会把文章使用的 SVG/WebP/GIF 图片转换为 PNG 上传，BMP 等不支持格式直接阻断，编辑器中的原始图片不变；Token 不写入文档或输出。扫码授权需要真实适配器：`WECHAT_QR_AUTH_URL` 的二维码附带一次性 `draftloom_state`，适配器 POST 回调时必须原样返回；`WECHAT_QR_IMAGE_URL` 模式需本机 `WECHAT_QR_CALLBACK_SECRET` 并在回调中提交 `callback_secret`。Windows 回调凭据以当前用户 DPAPI 加密；微信官方草稿接口本身不提供扫码登录。
 
 ## 共享动效能力
 

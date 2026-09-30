@@ -1,4 +1,4 @@
-# Draftloom 公众号自动排版 v0.4.6
+# Draftloom 公众号自动排版 v0.4.7
 
 把 Markdown、TXT、DOCX、PDF 文章导入后，先在本机统一转换为 Markdown 中间稿，再按**识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交**工作流处理：完成本地识别、清理特殊符号、正文自然化、提炼核心、智能排版、生成封面、手机预览，最后导出微信 HTML 或提交到公众号草稿箱。DOCX 优先调用 Microsoft 开源 MarkItDown 本地转换，未安装时回退到 Mammoth + Turndown；原始输入信息和 Markdown 中间稿保留用于回退。WebUI 顶部使用本地植入的 SAYELF 山野精灵 Logo，浏览器标签页也复用同一图标；新增“微信官方深色”可选视觉系统：深色底、绿色结构锚点、局部重点和居中留边的图片卡片。WebUI 预留共享 GSAP Motion Layer，需要动效时直接调用，不新增 Skill，也不把动效逻辑散落到各功能模块。
 
@@ -50,11 +50,11 @@ $env:PORT="4177"; npm start
 
 ## 最新版本下载
 
-当前本地工作版本：**v0.4.6**；GitHub 最新公开版本：**v0.4.6**
+当前本地工作版本：**v0.4.7**；GitHub 最新公开版本：**v0.4.7**
 
 - [打开 GitHub 仓库](https://github.com/chuanxituzhu-lab/sayelf-draftloom)
-- [下载 v0.4.6 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.6.zip)
-- [查看 v0.4.6 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.6/skill/SKILL.md)
+- [下载 v0.4.7 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.7.zip)
+- [查看 v0.4.7 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.7/skill/SKILL.md)
 
 源码 ZIP 已包含最新 Skill、WebUI、命令行工具和本地工作流；本地独立导出包仍保存在 `.local-data/exports/`，不上传到公开仓库。
 
@@ -191,7 +191,7 @@ npm start
 - 增加“一键优化排版”：统一字体、字号、行距、段距和标题层级。
 - 自动拆分过长段落，优化手机端阅读节奏；安全识别章节提示并转为标题。
 - 重点、金句和编号只做局部加粗或色块标注，不整段铺色；支持撤销回滚。
-- 自动排版指导的一键生成会先执行版式优化，再生成配图、标题和指导建议。
+- 自动排版指导“一键生成”会在本机完成版式和标题/配图编排，按微信兼容 HTML 检查字符数与 UTF-8 字节数；本地图片预检为每张图预留 480 字符，避免微信图片链接长度未知导致临界超限。图片上传后，再按微信返回的真实链接对最终 HTML 复检，通过后才提交草稿。超限时再蒸馏正文并更新摘要/封面文案；原稿受保护，可撤销/恢复。文章不会默认发送至外部 AI 平台；未通过限制时会明确报告剩余问题，不会假报成功。
 
 ## v0.2.0 更新内容
 
@@ -224,6 +224,13 @@ npm start
 - 正文默认调整为 15px、2.02 倍行距，降低正文对比度，保持长文阅读呼吸感。
 - 三级标题采用绿色视觉锚点，正文截图统一使用 88% 最大宽度的深色图片卡片，预览与微信导出 HTML 同步生效。
 - 更新 `skill/SKILL.md`、`SKILL.md` 与 `docs/visual-system.md`，记录参考边界、设计决策和可验证规则。
+
+## v0.4.7 更新内容
+
+- 公众号草稿提交仅在微信接口返回有效草稿编号后报告成功；页面提供可读成功回执并防止重复点击。
+- 为微信正文中的本地图片预留上传链接长度；上传后按微信返回的真实链接再次校验字符数与字节数。
+- 素材仅在有语义关联时自动匹配文章位置；无关素材留在本地素材库。
+- 精简微信 HTML 的重复行内样式，减少短文章因段落过多超过接口字符上限的误判。
 
 ## v0.4.6 更新内容
 

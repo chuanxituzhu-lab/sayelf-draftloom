@@ -598,7 +598,10 @@ export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = tr
       .map(asset => ({ asset, ...scoreAsset(asset, textOfBlock(anchor), keywords) }))
       .sort((a, b) => b.score - a.score)
       .find(item => item.score >= 1);
-    const chosen = semanticMatch?.asset || (fillUnmatched ? candidates[0] : null);
+    // Never place an unrelated image merely to fill a slot. In asset-fill mode
+    // the planner may inspect more anchors, but insertion still requires a
+    // semantic signal from the local filename/alt/caption/OCR/labels.
+    const chosen = semanticMatch?.asset || null;
     if (chosen) {
       usedForSections.add(chosen.id);
       const chosenRecognition = semanticMatch?.recognition || recognizeAssetContent(chosen);
@@ -822,36 +825,6 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
       generatedBy: asset?.generated ? 'autoComposeVisuals' : undefined
     });
     if (inserted) appliedBodyAdds += 1;
-  }
-
-  // Explicit “图片自动导入” mode also brings in any remaining library images.
-  // This is intentionally opt-in so ordinary semantic composition never drops
-  // unrelated historical assets into a new article.
-  if (fillUnmatched) {
-    const usedAssetIds = new Set(next.blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])]).filter(Boolean));
-    for (const asset of next.assets.filter(item => !usedAssetIds.has(item.id))) {
-      if (autoImageCount && plan.imageBudget.currentBodyImages + appliedBodyAdds >= plan.imageBudget.targetBodyImages) break;
-      const analysis = recognizeAssetContent(asset);
-      next.blocks.push({
-        id: randomId(),
-        type: 'image',
-        assetId: asset.id,
-        text: asset.alt || asset.name,
-        visualRole: 'library-auto',
-        visualMatch: {
-          confidence: analysis.confidence,
-          matchedKeywords: [],
-          matchedLabels: [],
-          contentLabels: analysis.labels,
-          recognitionSource: analysis.source,
-          matchMethod: 'content-recognition-fallback',
-          reason: '素材库图片自动填充'
-        }
-      });
-      usedAssetIds.add(asset.id);
-      appliedBodyAdds += 1;
-      plan.sectionPlacements.push({ anchorId: null, assetId: asset.id, role: 'library-auto', reason: '素材库图片自动填充', matchMethod: 'content-recognition-fallback', confidence: analysis.confidence, contentLabels: analysis.labels, recognitionSource: analysis.source });
-    }
   }
 
   const finalAssetAnalyses = next.assets.map(asset => ({ id: asset.id, name: asset.name, ...recognizeAssetContent(asset) }));

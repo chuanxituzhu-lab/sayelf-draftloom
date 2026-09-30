@@ -183,6 +183,23 @@ test('智能优化同步封面文案，并在预览中单独显示封面与内�
   assert.equal((preview.match(/封面/g) || []).length >= 1, true);
 });
 
+test('微信 HTML keeps many short paragraphs below the API character limit without deleting visible text', () => {
+  const doc = createInitialDocument();
+  const blocks = Array.from({ length: 140 }, (_, index) => ({
+    id: `short-${index}`,
+    type: 'paragraph',
+    text: `第${index + 1}段：普通人也能用AI完成一件真实的事。`
+  }));
+  const article = { ...doc, title: 'AI平权', subtitle: '约两千字的短文', blocks };
+  const html = renderArticleHtml(article);
+  const validation = inspectWechatArticle({ title: article.title, digest: article.subtitle, content: html });
+  assert.equal(blocks.reduce((sum, block) => sum + [...block.text].length, 0) < 20_000, true);
+  assert.equal(validation.ok, true);
+  assert.ok(blocks.every(block => html.includes(block.text)));
+  assert.match(html, /font-family:/);
+  assert.match(html, /line-height:/);
+});
+
 test('文章预览和微信 HTML 在正文末尾罗列自动关键词标签', () => {
   const doc = importArticle({ text: '# AI 内容创作\n\nAI 可以降低内容创作成本，持续执行才能获得反馈。' });
   const preview = renderDocumentBody(doc);

@@ -28,8 +28,30 @@ test('正文必须同时小于 20000 字符和 1MiB', () => {
 
 test('本地图片 Base64 在正文大小检查中按上传后的 URL 计量', () => {
   const html = `<p>正文</p><img src="data:image/png;base64,${'A'.repeat(WECHAT_LIMITS.contentBytes)}">`;
-  assert.ok(contentForWechatMeasurement(html).length < 100);
+  const measured = contentForWechatMeasurement(html);
+  assert.ok(measured.length < 600);
+  assert.match(measured, /https:\/\/mmbiz\.qpic\.cn\/x{100,}/);
   assert.equal(inspectWechatArticle({ content: html }).ok, true);
+});
+
+test('URL 编码 SVG 图片按上传后的微信图片 URL 计量', () => {
+  const html = `<p>正文</p><img src="data:image/svg+xml;charset=utf-8,${'%3Csvg%3E'.repeat(1000)}%29${'%3Cpath%3E'.repeat(1000)}">`;
+  const measured = contentForWechatMeasurement(html);
+  assert.ok(measured.length < 600);
+  assert.doesNotMatch(measured, /%3Csvg|%3Cpath/);
+  assert.equal(inspectWechatArticle({ content: html }).ok, true);
+});
+
+test('本地预检为上传后未知的图片 URL 留足空间，微信返回真实 URL 后仍按原文复检', () => {
+  const text = '正'.repeat(19_600);
+  const localHtml = `${text}<img src="data:image/png;base64,AA==">`;
+  const localCheck = inspectWechatArticle({ content: localHtml });
+  assert.equal(localCheck.ok, false);
+  assert.equal(localCheck.errors.some(item => item.id === 'contentChars'), true);
+
+  const uploadedHtml = `${text}<img src="https://mmbiz.qpic.cn/a/b/c?wx_fmt=png">`;
+  const uploadedCheck = inspectWechatArticle({ content: uploadedHtml });
+  assert.equal(uploadedCheck.ok, true);
 });
 
 test('原文链接检查以 UTF-8 字节数为准', () => {

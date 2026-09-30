@@ -494,6 +494,23 @@ function commit(intent, label) {
   return true;
 }
 
+function matchLibraryAssetsToArticle() {
+  const hasArticleText = doc.blocks.some(block => block.type !== 'image' && String(block.text || '').trim());
+  if (!hasArticleText) {
+    setStatus('图片已入库；导入文章后可自动匹配封面与章节位置');
+    return false;
+  }
+  const applied = commit({ type: 'autoComposeVisuals', generate: false, maxGenerated: 0, autoImageCount: true, fillUnmatched: true, titleMode: 'safe' }, '素材库图片智能匹配');
+  if (!applied) return false;
+  const plan = doc.meta?.visualPlan || {};
+  const bodyMatches = (plan.placements || []).filter(item => item.assetId && item.anchorId).length;
+  const cover = plan.coverAssetId ? assetById(plan.coverAssetId) : null;
+  const usedIds = new Set(doc.blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])]).filter(Boolean));
+  const unmatched = doc.assets.filter(asset => !usedIds.has(asset.id)).length;
+  setStatus(`素材匹配完成：${cover ? `已设封面「${cover.name}」` : '未找到可靠封面'}；正文匹配 ${bodyMatches} 个章节${unmatched ? `；${unmatched} 张低匹配素材留在素材库` : ''}。匹配依据为本地文件名、替代文字及已有描述/标签，请查看预览后再提交。`);
+  return true;
+}
+
 function runLocalPublishingWorkflow() {
   try {
     const result = runPublishingWorkflow({ doc }, {
@@ -546,7 +563,7 @@ function render() {
     <header class="topbar">
       <div class="brand-lockup"><img class="app-logo-mark" src="/assets/sayelf-logo.png" alt="SAYELF 山野精灵" width="34" height="34"><span class="brand-copy"><strong>公众号排版</strong><small>Draftloom · SAYELF</small></span><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
-        <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="按文章篇幅与章节密度控制数量，识别图片内容并匹配正文章节">图片智能导入</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
+        <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="使用本地文件名、替代文字和已有图片描述匹配封面及相关章节；低置信素材不会硬插入">匹配素材到文章</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
       </div>
     </header>
@@ -562,7 +579,7 @@ function render() {
         <div id="importDrop" class="import-drop"><strong>拖入文章、DOCX、PDF 或图片，自动排版</strong><span>DOCX/PDF 在本机识别并清理 Markdown 展示标记，保留正文中的 C#、#话题等；随后提炼、排版，导入后可继续人工调整</span></div>
         ${renderWorkflowPanel()}
         <div class="command-box"><div class="command-label">文字指令</div><div class="command-row"><textarea id="commandInput" rows="1" placeholder="如：把当前改成引用 / 拆分当前段落 / 添加表格：列1|列2"></textarea><button id="runCommand">执行</button></div><div class="hint">支持按区块转换、拆分、主题切换和组件创建；表格可用换行或分号分隔；未识别的文字会作为新段落。</div></div>
-        <div class="guidance-box"><div class="guidance-head"><div class="command-label">自动排版指导</div><button id="guidanceGenerateBtn" class="guidance-generate-button" type="button" title="根据当前文章自动生成章节、图片、标题和发布建议">一键生成</button></div><div id="guidanceList">${renderGuidance()}</div></div>
+        <div class="guidance-box"><div class="guidance-head"><div class="command-label">自动排版指导</div><button id="guidanceGenerateBtn" class="guidance-generate-button" type="button" title="本机完成排版、标题配图、微信字数与大小优化，再生成发布建议">一键生成</button></div><div id="guidanceList">${renderGuidance()}</div></div>
         ${renderWechatLimits()}
         ${renderHumanizerPanel()}
         ${renderCoverSummaryPanel()}
@@ -577,7 +594,7 @@ function render() {
       </aside>
     </main>
     <footer class="statusbar"><span id="statusText" role="status" aria-live="polite">${esc(status)}</span><span id="revisionText">v${doc.meta.revision} · ${new Date(doc.meta.updatedAt).toLocaleTimeString()}</span></footer>
-    <dialog id="draftDialog"><form method="dialog" class="draft-dialog"><div class="draft-dialog-head"><div><strong>导出到微信草稿箱</strong><p>先生成微信兼容草稿包，再按授权配置提交到公众号草稿箱。</p></div><button value="cancel" aria-label="关闭">×</button></div><div class="draft-status" id="draftStatus">正在检查本机授权配置…</div><div id="draftLimitBox"></div><div id="qrAuthBox" class="qr-auth" hidden></div><div class="draft-note"><b>授权说明</b><span>二维码由已配置的授权适配器提供；扫码完成后，适配器只需向本机回调地址提交凭据。凭据保存在本机 .local-data，下次启动自动复用。</span></div><div class="draft-actions"><button id="localDraftBtn" type="button">仅生成本地草稿包</button><button id="submitDraftBtn" type="button" class="primary-button">提交到公众号草稿箱</button></div><div class="draft-foot">草稿包由系统自动生成，普通编辑无需处理 JSON。</div></form></dialog>
+    <dialog id="draftDialog"><form method="dialog" class="draft-dialog"><div class="draft-dialog-head"><div><strong>导出到微信草稿箱</strong><p>先生成微信兼容草稿包，再按授权配置提交到公众号草稿箱。</p></div><button value="cancel" aria-label="关闭">×</button></div><div class="draft-status" id="draftStatus" role="status" aria-live="polite" aria-atomic="true">正在检查本机授权配置…</div><div id="draftLimitBox"></div><div id="qrAuthBox" class="qr-auth" hidden></div><div class="draft-note"><b>授权说明</b><span>二维码由已配置的授权适配器提供；扫码完成后，适配器只需向本机回调地址提交凭据。凭据保存在本机 .local-data，下次启动自动复用。</span></div><div class="draft-actions"><button id="localDraftBtn" type="button">仅生成本地草稿包</button><button id="submitDraftBtn" type="button" class="primary-button">提交到公众号草稿箱</button></div><div class="draft-foot">草稿包由系统自动生成，普通编辑无需处理 JSON。</div></form></dialog>
   </div>`;
   bindEvents();
   restoreViewState(viewState);
@@ -1008,15 +1025,35 @@ function bindEvents() {
   const coreThemeButton = document.querySelector('#coreThemeImagesBtn');
   if (coreThemeButton) coreThemeButton.onclick=()=>commit({type:'generateCoreThemeImages',count:2},'根据核心生成两张主题图');
   document.querySelector('#titleImageAutoBtn').onclick=()=>commit({type:'generateTitleImage'},'提炼核心并生成标题图');
-  document.querySelector('#assetAutoFillBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:false,maxGenerated:0,autoImageCount:true,fillUnmatched:true,titleMode:'safe'},'图片智能导入');
+  document.querySelector('#assetAutoFillBtn').onclick=matchLibraryAssetsToArticle;
   document.querySelector('#layoutAutoBtn').onclick=()=>commit({type:'autoFormat'},'一键优化公众号排版');
   document.querySelector('#wechatCheckBtn').onclick=runWechatCheck;
-  document.querySelector('#guidanceGenerateBtn').onclick=()=>{
+  document.querySelector('#guidanceGenerateBtn').onclick=async()=>{
+    const button = document.querySelector('#guidanceGenerateBtn');
+    button.disabled = true;
+    button.textContent = '正在生成…';
+    setStatus('正在本机优化排版与微信发布限制…');
+    try {
     commit({type:'autoFormat'},'自动优化公众号排版');
     commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral'},'自动排版一键生成');
+    const repair = await autoRepairWechatConstraints('自动排版一键生成（含微信限制优化）');
+    if (repair.error) throw new Error(repair.error);
     autoGuidance = generateLayoutGuidance(doc);
     render();
-    setStatus(`自动排版一键生成完成：已同步标题、配图和 ${autoGuidance.itemCount} 项指导；带入指令可选`);
+    const validation = getWechatDraftValidation();
+    document.querySelectorAll('.editor-panel .wechat-limits').forEach(el => { el.outerHTML = renderWechatLimits(validation); });
+    renderDraftLimitBox(validation);
+    const count = validation.fields?.contentChars;
+    const countText = Number.isFinite(count) ? `正文 ${count.toLocaleString()} / ${WECHAT_LIMITS.contentChars.toLocaleString()} 字` : '正文长度已复核';
+    const outcome = validation.ok ? '已符合微信发布限制' : `仍有 ${validation.errors.length} 项限制未满足`;
+    const originalPreserved = doc.meta?.wechatOptimization?.protectedOriginalBody ? '；原稿已保留，可撤销或恢复' : '';
+    setStatus(`一键生成完成：${outcome}（${countText}）；已同步标题、配图和 ${autoGuidance.itemCount} 项指导${originalPreserved}；文章仅在本机处理`);
+    } catch (error) {
+      setStatus(`一键生成未完成：${error.message}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = '一键生成';
+    }
   };
   document.querySelector('#wechatOptimizeBtn').onclick=()=>autoRepairWechatConstraints('智能优化微信发布约束').then(() => {
     const validation = getWechatDraftValidation();
@@ -1070,7 +1107,7 @@ async function handleAssets(e){
       const prepared=await optimizeImageFile(file);
       return {id:crypto.randomUUID(),name:file.name,type:prepared.type,size:prepared.size,dataUrl:prepared.dataUrl,alt:file.name.replace(/\.[^.]+$/,'')};
     }));
-    if(commit({type:'addAssets',assets},`素材批量入库：${assets.length} 张`)) setStatus(`已上传 ${assets.length} 张，可从素材库直接调用`);
+    if(commit({type:'addAssets',assets},`素材批量入库：${assets.length} 张`)) matchLibraryAssetsToArticle();
     if (e.target.files.length > files.length) setStatus(`已达到素材容量 ${MAX_ASSETS} 张，超出部分未导入`);
   } catch(err) { setStatus(`素材上传失败：${err.message}`); }
   e.target.value='';
@@ -1141,6 +1178,9 @@ function renderAuthBox(value={}){
 }
 async function submitDraftToWechat({skipConfirm=false}={}){
   let statusEl=document.querySelector('#draftStatus');
+  const submitButton=document.querySelector('#submitDraftBtn');
+  if(submitButton?.disabled)return;
+  if(submitButton){submitButton.disabled=true;submitButton.textContent='正在提交…';}
   try {
     const validation=getWechatDraftValidation();
     renderDraftLimitBox(validation);
@@ -1168,7 +1208,7 @@ async function submitDraftToWechat({skipConfirm=false}={}){
       const idText=draftId?`草稿编号：${esc(draftId)}`:'接口未返回草稿编号';
       const nextAction=esc(result.delivery?.nextAction||'请在微信公众号后台人工审核后发送');
       statusEl.className='draft-status ready success';
-      statusEl.innerHTML=`<strong>✓ 提交成功</strong><span>文章已进入公众号草稿箱</span><small>${idText}<br>${nextAction}</small>`;
+      statusEl.innerHTML=`<strong>✓ 提交成功！文章已进入微信公众号草稿箱</strong><span>已收到微信接口的成功回执</span><small>${idText}<br>${nextAction}</small>`;
       doc = recordWorkflowSubmission(doc, result.delivery);
       persist();
       refreshWorkflowPanel();
@@ -1187,6 +1227,8 @@ async function submitDraftToWechat({skipConfirm=false}={}){
     persist();
     refreshWorkflowPanel();
     statusEl.className='draft-status local error'; statusEl.textContent=`提交失败：${message}`; setStatus(`草稿导出失败：${message}`);
+  } finally {
+    if(submitButton){submitButton.disabled=false;submitButton.textContent='提交到公众号草稿箱';}
   }
 }async function readArticleFile(file){
   const kind=getArticleFileKind(file);

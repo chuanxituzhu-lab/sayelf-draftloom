@@ -1484,13 +1484,17 @@ export function renderArticleHtml(doc) {
     ? `border-left:0;border-bottom:1px solid ${themeLine};padding:0 0 7px;`
     : `padding-left:10px;border-left:3px solid ${theme.accent};`;
   const styles = {
-    article: `width:100%;max-width:677px;box-sizing:border-box;margin:0 auto;padding:24px 20px 32px;background:${articleBackground};color:${theme.ink};font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};word-break:break-word;overflow-wrap:anywhere;`,
+    article: `width:100%;max-width:677px;box-sizing:border-box;margin:0 auto;padding:24px 20px 32px;background:${articleBackground};color:${bodyInk};font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};word-break:break-word;overflow-wrap:anywhere;`,
     title: `font-family:${layout.headingFontFamily};font-size:26px;line-height:1.4;letter-spacing:.02em;margin:0 0 10px;text-align:${layout.titleAlign};color:${theme.ink};`,
     subtitle: `color:${mutedInk};margin:0 0 6px;text-align:${layout.titleAlign};line-height:1.7;`,
     meta: `font-size:12px;color:${mutedInk};margin-bottom:26px;text-align:${layout.titleAlign};line-height:1.5;`,
     heading: `font-family:${layout.headingFontFamily};font-size:20px;line-height:1.5;margin:${layout.headingGap}px 0 13px;color:${theme.ink};${headingDecoration}`,
     subheading: `font-family:${layout.headingFontFamily};font-size:18px;line-height:1.5;margin:24px 0 11px;color:${theme.dark ? theme.accent : theme.ink};${subheadingDecoration}`,
-    paragraph: `font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};text-align:${layout.paragraphAlign};white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;margin:${layout.paragraphGap}px 0;color:${bodyInk};`,
+    // Inheritable typography and wrapping live on the article root. Keep each
+    // paragraph's inline style lean: WeChat counts the submitted HTML string,
+    // so repeating the full font stack on hundreds of blocks can breach the
+    // 20k content limit even when the visible article is short.
+    paragraph: `line-height:${layout.bodyLineHeight};text-align:${layout.paragraphAlign};white-space:pre-wrap;margin:${layout.paragraphGap}px 0;`,
     inlineMark: theme.dark
       ? `background:rgba(25,216,117,.16);color:${theme.accent};font-weight:700;padding:0 .18em;border-radius:3px;`
       : `background:#fff1cf;color:${theme.ink};font-weight:700;padding:0 .18em;border-radius:3px;`,

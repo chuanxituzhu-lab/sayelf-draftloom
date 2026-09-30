@@ -152,4 +152,10 @@ test('WebUI binds both one-click 1-4 buttons without duplicate IDs', async () =>
   assert.equal((appSource.match(/id="workflowRunTopBtn"/g) || []).length, 1);
   assert.match(appSource, /querySelectorAll\('#workflowRunBtn, #workflowRunTopBtn'\)/);
   assert.match(appSource, /button\.onclick = runLocalPublishingWorkflow/);
+  assert.match(appSource, /guidanceGenerateBtn'\)\.onclick=async/);
+  assert.match(appSource, /autoRepairWechatConstraints\('自动排版一键生成（含微信限制优化）'\)/);
+  assert.match(appSource, /文章仅在本机处理/);
+  assert.match(appSource, /id="draftStatus" role="status" aria-live="polite"/);
+  assert.match(appSource, /提交成功！文章已进入微信公众号草稿箱/);
+  assert.match(appSource, /submitButton\.disabled=true/);
 });
