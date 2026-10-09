@@ -403,7 +403,7 @@ export function distillArticleStage(doc = {}, { applyTitleWhenMissing = true } =
     metadata: contentMetadata,
     keywords: keywordPlan.keywords,
     selectedTitle: titlePlan.selected,
-    titleCandidates: titlePlan.candidates.map(item => ({ title: item.title, rationale: item.rationale, score: item.score })),
+    titleCandidates: titlePlan.candidates.map(item => ({ title: item.title, rationale: item.rationale, evidence: item.evidence })),
     changes,
     bodyRewritten: false,
     handoff: { accepted: true, from: 'distill', to: 'layout' },

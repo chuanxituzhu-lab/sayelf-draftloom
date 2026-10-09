@@ -9,9 +9,9 @@ import { draftCoverCopy, renderCoverSvg, auditCoverImage, COVER_SPEC } from '../
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, inspectWechatAssetPlan, charCount, plannedWechatImageType } from '../src/wechat-limits.js';
 import { applyProtectedLocalConfig } from './local-config.mjs';
 import { readProtectedAuth } from './local-auth.mjs';
-import { normalizeWechatAsset, parseImageDataUrl } from './wechat-media.mjs';
+import { normalizeWechatAsset, parseImageDataUrl, renderWechatCoverAsset } from './wechat-media.mjs';
 import { extractLocalDocument } from './document-extract.mjs';
-import { verifyWechatDraftResponse } from '../src/wechat-response.js';
+import { describeWechatError, verifyWechatDraftResponse } from '../src/wechat-response.js';
 import { distillArticleStage, getWorkflowState, humanizeArticleStage, layoutArticleStage, recordWorkflowSubmission, reviewArticleStage, runPublishingWorkflow, skipHumanizeArticleStage } from '../src/workflow.js';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -240,21 +240,6 @@ function wechatDraftStatus() {
   const qrImageUrl = process.env.WECHAT_QR_IMAGE_URL || null;
   return { remoteReady: hasToken || hasAppCredentials, authorized: hasToken, persisted, qrAuthorization: Boolean(qrAuthUrl || qrImageUrl), qrAuthUrl, qrImageUrl, mode: hasToken || hasAppCredentials ? 'wechat-api' : 'local-bundle', message: '授权凭据保存在本机 .local-data；二维码由授权适配器提供。' };
 }
-function describeWechatError(body = {}) {
-  const map = {
-    40001: 'access_token 无效或过期，请检查 AppID/AppSecret',
-    40007: 'media_id 无效，封面素材可能已失效',
-    40009: '图片超出大小限制（≤10MB）',
-    40164: '调用 IP 不在公众号白名单，请在「设置与开发→基本配置→IP 白名单」加入微信错误消息中的公网 IP',    41001: '缺少 access_token 参数',
-    45009: '接口调用频次超限',
-    45166: '内容含敏感词或非法 HTML 标签，请检查正文',
-    48001: '接口未授权，需认证公众号并开通草稿箱权限',
-    53404: '账号已被限制，无法新建草稿'
-  };
-  if (body.errcode && map[body.errcode]) return `[${body.errcode}] ${map[body.errcode]}`;
-  if (body.errmsg) return `[${body.errcode || '?'}] ${body.errmsg}`;
-  return '';
-}
 const FORBIDDEN_ENDPOINTS = ['freepublish/submit', 'message/mass', 'message/masssend'];
 function assertDraftOnly(endpoint) {
   const hit = FORBIDDEN_ENDPOINTS.find(fragment => endpoint.includes(fragment));
@@ -300,7 +285,12 @@ async function publishFromState({ allowRemote = false } = {}) {
   const htmlPath = join(out, 'article.html');
   const payloadPath = join(out, 'draft-payload.json');
   const manifestPath = join(out, 'publish-manifest.json');
-  let renderDoc = state.doc;
+  let renderDoc = clone(state.doc);
+  const coverBlockForRender = renderDoc.blocks.find(block => block.type === 'image' && block.visualRole === 'cover') || renderDoc.blocks.find(block => block.type === 'image');
+  const coverAssetForRender = coverBlockForRender && renderDoc.assets.find(asset => asset.id === coverBlockForRender.assetId);
+  if (coverAssetForRender && coverAssetForRender.source !== 'draftloom:creative-local') {
+    Object.assign(coverAssetForRender, await renderWechatCoverAsset(coverAssetForRender));
+  }
   let html = renderHtml(renderDoc);
   const title = state.doc.title || '';
   if (charCount(title) > WECHAT_LIMITS.titleChars) throw new Error(`标题超 ${WECHAT_LIMITS.titleChars} 字（微信 draft/add 上限），当前 ${charCount(title)} 字，请精简`);
@@ -325,9 +315,8 @@ async function publishFromState({ allowRemote = false } = {}) {
   if (endpoint && token) {
     const officialApi = endpoint.includes('api.weixin.qq.com');
     if (officialApi) {
-      renderDoc = clone(state.doc);
       const usedAssetIds = new Set(renderDoc.blocks.flatMap(block => [block.assetId, ...(block.assetIds || [])].filter(Boolean)));
-      renderDoc.assets = await Promise.all(renderDoc.assets.map(asset => usedAssetIds.has(asset.id) ? normalizeWechatAsset(asset) : asset));
+      renderDoc.assets = await Promise.all(renderDoc.assets.map(asset => usedAssetIds.has(asset.id) && asset.id !== coverAssetForRender?.id ? normalizeWechatAsset(asset) : asset));
       for (const asset of renderDoc.assets.filter(item => usedAssetIds.has(item.id))) {
         const issue = inspectWechatAssetPlan(asset).errors[0];
         if (issue) throw new Error(`微信图片 ${asset.name || asset.id}：${issue}`);
@@ -431,7 +420,7 @@ try {
   else if (command === 'visuals' || command === 'compose' || command === 'viral-title' || command === 'assets-fill' || command === 'fill-assets') output(await applyIntent({ type: 'autoComposeVisuals', generate: !['viral-title', 'assets-fill', 'fill-assets'].includes(command) && option('generate', 'true') !== 'false', maxGenerated: ['viral-title', 'assets-fill', 'fill-assets'].includes(command) ? 0 : Number(option('max-generated', 3)), autoImageCount: command !== 'viral-title', titleMode: command === 'viral-title' ? 'viral' : 'safe', forceTitle: command === 'viral-title' || option('force-title', 'false') === 'true', fillUnmatched: ['assets-fill', 'fill-assets'].includes(command) }, command === 'viral-title' ? '生成爆款标题' : ['assets-fill', 'fill-assets'].includes(command) ? '图片智能导入' : '智能配图与标题'));
   else if (command === 'cover-set' || command === 'smart-cover') output(await applyIntent({ type: 'smartCover' }, '封面一键设置'));
   else if (command === 'intent') output(await applyIntent(JSON.parse(option('json', '{}')), '结构化指令'));
-  else if (command === 'export') { const state = await loadState(); const out = resolve(option('out', `wechat-layout-${state.doc.meta.revision}.html`)); await writeFile(out, renderHtml(state.doc), 'utf8'); output({ out, revision: state.doc.meta.revision }); }
+  else if (command === 'export') { const state = await loadState(); const out = resolve(option('out', `wechat-layout-${state.doc.meta.revision}.html`)); const exportDoc = clone(state.doc); const block = exportDoc.blocks.find(item => item.type === 'image' && item.visualRole === 'cover') || exportDoc.blocks.find(item => item.type === 'image'); const asset = block && exportDoc.assets.find(item => item.id === block.assetId); if (asset && asset.source !== 'draftloom:creative-local') Object.assign(asset, await renderWechatCoverAsset(asset)); await writeFile(out, renderHtml(exportDoc), 'utf8'); output({ out, revision: state.doc.meta.revision, coverRenderedLocally: Boolean(asset) }); }
   else if (command === 'cover-import' || command === 'import-cover') output(await importCoverIntoState());
   else if (command === 'cover') {
     const state = await loadState();

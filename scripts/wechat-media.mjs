@@ -1,5 +1,6 @@
 import sharp from 'sharp';
 import { plannedWechatImageType } from '../src/wechat-limits.js';
+import { renderCoverCopyOverlaySvg } from '../src/cover.js';
 
 const SVG_TYPE = 'image/svg+xml';
 const PNG_TYPE = 'image/png';
@@ -60,5 +61,31 @@ export async function normalizeWechatAsset(asset = {}) {
     };
   } catch (error) {
     throw new Error(`图片 ${asset.name || '未命名'} 转换 PNG 失败：${error.message}`);
+  }
+}
+
+/** Create a non-destructive, local-only cover derivative with editable copy baked in. */
+export async function renderWechatCoverAsset(asset = {}, { main = asset.coverMain || '', sub = asset.coverSub || '' } = {}) {
+  const parts = parseImageDataUrl(asset.dataUrl);
+  if (!parts) throw new Error(`封面 ${asset.name || '未命名'} 不是可处理的本地 Data URL`);
+  const overlay = renderCoverCopyOverlaySvg({ main, sub });
+  try {
+    const image = sharp(parts.bytes).rotate().resize(900, 383, { fit: 'cover', position: 'centre' });
+    if (overlay) image.composite([{ input: Buffer.from(overlay), blend: 'over' }]);
+    const png = await image.png().toBuffer();
+    const metadata = await sharp(png).metadata();
+    return {
+      ...asset,
+      name: imageNameAsPng(asset.name || 'draftloom-cover.png'),
+      type: PNG_TYPE,
+      size: png.length,
+      width: metadata.width || 900,
+      height: metadata.height || 383,
+      dataUrl: `data:${PNG_TYPE};base64,${png.toString('base64')}`,
+      renderedLocally: true,
+      convertedFrom: asset.name || parts.type
+    };
+  } catch (error) {
+    throw new Error(`封面本地渲染失败：${error.message}`);
   }
 }

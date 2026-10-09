@@ -17,16 +17,31 @@ test('title derivation prefers a markdown heading and keeps WeChat length safe',
   assert.equal(result.source, 'heading');
 });
 
-test('viral title plan summarizes the article and stays within the WeChat title limit', () => {
+test('title candidates lead with the core conclusion and show exact body evidence', () => {
   const plan = generateViralTitlePlan({
-    text: '# 罗森塔尔效应\n\n老师的期待会改变孩子的表现，家庭中的鼓励也会影响成长。',
-    profile: { targetKeywords: ['心理暗示'] }
+    text: '# AI 与工作\n\n真正决定工作质量的，是清晰的目标和人的判断。选择工具前，先把目标说清楚。',
+    profile: { targetKeywords: ['无关热搜词'] }
   });
   assert.equal(plan.mode, 'viral');
-  assert.ok(plan.summary.includes('老师的期待'));
-  assert.ok(plan.candidates.length >= 3);
+  assert.equal(plan.strategy, 'conclusion-first-hook');
+  assert.equal(plan.candidates[0].title, '真正决定工作质量的，是清晰的目标和人的判断');
+  assert.equal(plan.candidates[0].evidence.sentence, '真正决定工作质量的，是清晰的目标和人的判断。');
+  assert.equal(plan.candidates[0].evidence.sentenceIndex, 0);
+  assert.match(plan.candidates[0].rationale, /结论先行/);
+  assert.equal(Object.hasOwn(plan.candidates[0], 'score'), false);
+  assert.ok(plan.candidates.length >= 2);
   assert.ok(plan.candidates.every(item => [...item.title].length <= 32));
+  assert.ok(plan.candidates.every(item => item.evidence?.sentence));
+  assert.ok(plan.candidates.every(item => !item.title.includes('无关热搜词')));
   assert.equal(plan.selected, plan.candidates[0].title);
+  assert.match(plan.note, /不预测阅读量/);
+});
+
+test('title generator fails closed when the article has no evidence-bearing body sentence', () => {
+  const plan = generateViralTitlePlan({ text: '# 只有标题' });
+  assert.deepEqual(plan.candidates, []);
+  assert.equal(plan.selected, '');
+  assert.match(plan.note, /缺少足够的核心句/);
 });
 
 test('core extraction selects signal-bearing sentences and keeps reviewable points', () => {
@@ -70,18 +85,33 @@ test('keyword extraction is deterministic and useful for semantic image matching
   assert.ok(keywords.length <= 8);
 });
 
-test('core theme generation creates two local images and remains idempotent', () => {
+test('core theme generation follows available section anchors and remains idempotent', () => {
   const doc = importArticle({ text: '# AI 与内容创作\n\nAI 可以降低制作成本，但 Idea 决定表达方向。持续发布、获得数据反馈，才能形成自己的方法。' });
   const first = autoComposeDocument(doc, { generate: true, includeCover: false, maxGenerated: 0, coreThemeCount: 2 });
   const firstThemes = first.assets.filter(asset => asset.visualPurpose === 'core-theme');
   const firstBlocks = first.blocks.filter(block => block.visualPurpose === 'core-theme');
-  assert.equal(firstThemes.length, 2);
-  assert.equal(firstBlocks.length, 2);
-  assert.equal(first.meta.visualPlan.coreThemeImageIds.length, 2);
+  assert.equal(firstThemes.length, 1);
+  assert.equal(firstBlocks.length, 1);
+  assert.equal(first.meta.visualPlan.coreThemeImageIds.length, 1);
   assert.ok(firstThemes.every(asset => asset.name.startsWith('draftloom-theme-')));
   const second = autoComposeDocument(first, { generate: true, includeCover: false, maxGenerated: 0, coreThemeCount: 2 });
-  assert.equal(second.assets.filter(asset => asset.visualPurpose === 'core-theme').length, 2);
-  assert.equal(second.blocks.filter(block => block.visualPurpose === 'core-theme').length, 2);
+  assert.equal(second.assets.filter(asset => asset.visualPurpose === 'core-theme').length, 1);
+  assert.equal(second.blocks.filter(block => block.visualPurpose === 'core-theme').length, 1);
+});
+
+test('theme and section visuals are anchored after section text and are not clustered', () => {
+  const doc = importArticle({ text: '# 主题\n\n## 第一章\n\n第一章正文描述了一个足够完整的观点和相关做法。\n\n## 第二章\n\n第二章正文继续解释另一种方法和实践过程。' });
+  const result = autoComposeDocument(doc, { generate: true, includeCover: false, maxGenerated: 2, coreThemeCount: 2 });
+  const images = result.blocks.map((block, index) => ({ block, index })).filter(item => item.block.type === 'image');
+  assert.ok(images.length >= 1);
+  for (let index = 1; index < result.blocks.length; index += 1) {
+    assert.equal(result.blocks[index - 1].type === 'image' && result.blocks[index].type === 'image', false);
+  }
+  for (const { block, index } of images) {
+    const precedingContent = result.blocks.slice(0, index).some(item => item.type === 'paragraph');
+    assert.equal(precedingContent, true);
+    assert.equal(result.blocks[index - 1].type === 'heading', false);
+  }
 });
 
 test('article keyword plan returns deduplicated copy-ready hashtags', () => {
@@ -205,6 +235,17 @@ test('viral composition applies a title plan but respects a human-locked title',
   const locked = autoComposeDocument({ ...viral, meta: { ...viral.meta, titleLocked: true }, title: '人工确认标题' }, { generate: false, titleMode: 'viral' });
   assert.equal(locked.title, '人工确认标题');
   assert.equal(locked.meta.titlePlan.applied, false);
+});
+
+test('conclusion-first title suggestions use the current edited body, not the imported snapshot', () => {
+  const imported = importArticle({ text: '# 文章主題\n\n舊正文的核心結論是先核对事实，再给出可执行建议。' });
+  const edited = importArticle({ text: '# 文章主題\n\n新正文的核心结论是先说明结果，再解释关键原因。' });
+  const current = { ...imported, blocks: edited.blocks };
+  const composed = autoComposeDocument(current, { generate: false, includeCover: false, titleMode: 'viral', forceTitle: true });
+  assert.equal(composed.meta.titlePlan.strategy, 'conclusion-first-hook');
+  assert.ok(composed.meta.titlePlan.candidates.length > 0);
+  assert.ok(composed.meta.titlePlan.candidates.every(item => current.blocks.some(block => block.text?.includes(item.evidence.sentence))));
+  assert.ok(composed.meta.titlePlan.candidates.every(item => !item.evidence.sentence.includes('旧正文')));
 });
 
 test('auto compose uses uploaded cover and section assets before generating fallbacks', () => {

@@ -18,6 +18,7 @@ Generate restrained, article-specific visuals locally and place them at the matc
 ## Local rendering contract
 
 - JavaScript generates SVG from local article semantics; no remote image API, browser service, external font, or telemetry is required.
+- Cover headline/subhead text is rendered by the existing local SVG/Canvas/compositing code; never send article copy or source imagery to a third-party renderer. Preserve the source image and reuse the same locally rendered derivative in preview, HTML export, and publishing; keep user edits authoritative.
 - Draftloom converts SVG to a WeChat-compatible raster format locally during submission. Keep the original SVG in the local asset library for editing.
 - For a request specifically asking for a short video, first check local FFmpeg availability, render the SVG to MP4 with `scripts/render-svg-video.mjs`, and keep the result local. This creates a 4-second subtle-motion video from one local illustration. Treat it as a separate output path: do not claim it has been inserted into a WeChat article unless the active Draftloom renderer/exporter supports and verifies that media block. Do not send a `file://` or localhost media URL to the public account.
 - If a requested local renderer or licensed palette is unavailable, stop that branch or use the clearly labeled RAL-inspired fallback; never report an unavailable render as complete.

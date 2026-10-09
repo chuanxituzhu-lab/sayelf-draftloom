@@ -368,45 +368,58 @@ function titleTopic({ text = '', filename = '', keywords = [], profile = {} } = 
   return truncate(clean(filename).replace(/\.[^.]+$/, '') || '这篇文章', 12);
 }
 
-/**
- * Builds engaging but evidence-bound title candidates. “爆款” here means a
- * strong hook (question, contrast, story or practical takeaway), not fabricated
- * claims. Candidates are kept under the WeChat 32-character title limit.
- */
+/** Build concise, conclusion-first title hooks from sentences in the article. */
 export function generateViralTitlePlan({ text = '', filename = '', currentTitle = '', keywords = [], profile = {}, limit = 5 } = {}) {
   const source = plainArticleText(text);
-  const extracted = [...new Set([...(Array.isArray(keywords) ? keywords : []), ...extractKeywords(source, 8)])].filter(Boolean);
-  const topic = titleTopic({ text, filename, keywords: extracted, profile });
-  const secondary = extracted.find(item => item !== topic && item.length >= 2) || '真实经验';
-  const summary = summarizeArticle({ text: source, title: currentTitle });
-  const detail = truncate(summary.replace(/[。！？!?].*$/, ''), 15);
-  const raw = [
-    { pattern: 'question', title: `为什么${topic}，很多人都忽略了这一点？`, rationale: '问题钩子 + 留下阅读悬念' },
-    { pattern: 'contrast', title: `别只看到${topic}的表面：关键其实是${secondary}`, rationale: '反差表达 + 核心关键词前置' },
-    { pattern: 'insight', title: `原来，${topic}背后藏着一个被忽略的规律`, rationale: '反常识切口 + 观点承诺' },
-    { pattern: 'story', title: `一个真实案例，讲透${topic}为什么有效`, rationale: '真实案例 + 明确收益' },
-    { pattern: 'takeaway', title: `从“${detail || topic}”看懂${topic}`, rationale: '内容摘要 + 读者可获得的结论' }
-  ];
+  const body = currentTitle && source.startsWith(clean(currentTitle)) ? source.slice(clean(currentTitle).length).trim() : source;
+  const sourceSentences = body.split(/(?<=[。！？!?；;])\s*/).map(clean).filter(item => item.length >= 8);
+  const core = extractCoreContent({ text: source, title: currentTitle, max: 160, maxPoints: 5 });
+  const extracted = [...new Set([...(Array.isArray(keywords) ? keywords : []), ...extractKeywords(source, 8)])]
+    .filter(item => item && source.toLowerCase().includes(String(item).toLowerCase()));
+  const topic = core.topic || titleTopic({ text, filename, keywords: extracted, profile });
+  const summary = core.summary || summarizeArticle({ text: source, title: currentTitle });
   const seen = new Set();
-  const candidates = raw.map(item => ({
-    ...item,
-    title: truncate(item.title.replace(/\s+/g, ' '), 32),
-    score: item.pattern === 'question' ? 92 : item.pattern === 'contrast' ? 90 : item.pattern === 'insight' ? 88 : item.pattern === 'story' ? 86 : 84
-  })).filter(item => {
-    if (!item.title || seen.has(item.title)) return false;
-    seen.add(item.title);
-    return true;
-  }).slice(0, Math.max(1, Math.min(8, Number(limit) || 5)));
-  const selected = candidates[0]?.title || deriveArticleTitle({ text: source, filename, currentTitle }).title;
+  const candidates = [];
+  const addCandidate = (sentence, type = 'TOPIC', knownIndex = null) => {
+    const evidence = clean(sentence);
+    if (!evidence || !sourceSentences.includes(evidence)) return;
+    const title = truncate(evidence
+      .replace(/^(?:(?:所以|因此|总之|由此可见|结论是|归根结底)[，,：:\s]*)/, '')
+      .replace(/[。！？!?；;]+$/, ''), WECHAT_LIMITS.titleChars);
+    if ([...title].length < 4 || seen.has(title)) return;
+    seen.add(title);
+    const sentenceIndex = Number.isInteger(knownIndex) ? knownIndex : sourceSentences.indexOf(evidence);
+    const label = type === 'CONCLUSION' ? '正文核心结论' : type === 'METHOD' ? '正文可执行要点' : '正文核心观点';
+    candidates.push({
+      pattern: type.toLowerCase(),
+      title,
+      rationale: `结论先行 · ${label}`,
+      evidence: { source: 'article-body', sentence: evidence, sentenceIndex, type }
+    });
+  };
+  const primary = core.conclusion || core.thesis;
+  const primaryEvidence = core.keySentences.find(item => item.sentence === primary);
+  if (primary) addCandidate(primary, primaryEvidence?.type || (core.conclusion ? 'CONCLUSION' : 'TOPIC'), primaryEvidence?.index);
+  const supporting = [
+    ...core.keySentences.filter(item => item.type === 'CONCLUSION'),
+    ...core.keySentences.filter(item => item.type === 'METHOD'),
+    ...core.keySentences.filter(item => item.type === 'TOPIC')
+  ];
+  for (const item of supporting) addCandidate(item.sentence, item.type, item.index);
+  candidates.splice(Math.max(1, Math.min(8, Number(limit) || 5)));
+  const selected = candidates[0]?.title || clean(currentTitle);
   return {
     mode: 'viral',
+    strategy: 'conclusion-first-hook',
     selected,
     topic,
     summary,
     keywords: extracted.slice(0, 8),
     candidates,
     generatedAt: new Date().toISOString(),
-    note: '候选标题只使用文章中已出现的主题词；发布前仍建议人工核对事实与语气。'
+    note: candidates.length
+      ? '先呈现文章核心结论，再用正文已有观点或方法形成钩子；每条均附正文依据。不预测阅读量或保证爆款，发布前请核对标题与全文是否一致。'
+      : '正文缺少足够的核心句，暂不生成标题候选；请补充正文后再试。'
   };
 }
 
@@ -527,8 +540,18 @@ function distributeAnchors(items, max) {
 
 function anchorCandidates(doc = {}, { max = 4 } = {}) {
   const blocks = doc.blocks || [];
-  const headings = blocks.filter(block => block.type === 'heading');
-  if (headings.length) return distributeAnchors(headings, max);
+  const headings = blocks.map((block, index) => ({ block, index })).filter(item => item.block.type === 'heading');
+  if (headings.length) {
+    const sections = headings.map(({ block: heading, index }, sectionIndex) => {
+      const nextHeading = headings[sectionIndex + 1]?.index ?? blocks.length;
+      const body = blocks.slice(index + 1, nextHeading).filter(block => ['paragraph', 'quote', 'list'].includes(block.type) && clean(textOfBlock(block)).length > 0);
+      if (!body.length) return null;
+      const anchor = body.at(-1);
+      const sectionText = [heading.text, ...body.map(textOfBlock)].filter(Boolean).join(' ');
+      return { ...anchor, text: sectionText };
+    }).filter(Boolean);
+    return distributeAnchors(sections, max);
+  }
   const paragraphs = blocks.filter(block => block.type === 'paragraph' && textOfBlock(block).length >= 28);
   return distributeAnchors(paragraphs.length ? paragraphs : blocks.filter(block => ['paragraph', 'quote', 'list'].includes(block.type)), max);
 }
@@ -719,17 +742,19 @@ function insertAfterAnchor(blocks, anchorId, block) {
 export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false, useCoreForCover = false, forceCoreSummary = false, autoImageCount = false, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages, coreThemeCount = 0, colorPalette = 'default' } = {}) {
   const next = clone(input);
   const source = articleSource(next);
-  const coreContent = extractCoreContent({ text: source, title: next.title, max: 96, maxPoints: 3 });
+  const currentBody = (next.blocks || []).filter(block => !['image', 'heading'].includes(block.type)).map(textOfBlock).filter(Boolean).join('\n') || source;
+  const coreContent = extractCoreContent({ text: currentBody, title: next.title, max: 96, maxPoints: 3 });
   const titlePlan = titleMode === 'viral'
-    ? generateViralTitlePlan({ text: source, filename: next.meta?.importedFrom || '', currentTitle: next.title, profile: titleProfile })
+    ? generateViralTitlePlan({ text: currentBody, filename: next.meta?.importedFrom || '', currentTitle: next.title, keywords: coreContent.keywords, profile: titleProfile })
     : null;
   const canAutoSetTitle = forceTitle === true || next.meta?.titleLocked !== true;
   const titleInfo = titlePlan && canAutoSetTitle
     ? { title: titlePlan.selected, confidence: 0.86, source: 'viral', mode: 'viral' }
     : deriveArticleTitle({ text: source, filename: next.meta?.importedFrom || '', currentTitle: next.title });
-  const subtitle = forceCoreSummary ? coreContent.summary : deriveArticleSubtitle({ text: source, currentSubtitle: next.subtitle });
+  const preserveHumanSummary = next.meta?.subtitleLocked === true || next.meta?.subtitleSource === 'human';
+  const subtitle = forceCoreSummary && !preserveHumanSummary ? coreContent.summary : preserveHumanSummary ? next.subtitle : deriveArticleSubtitle({ text: source, currentSubtitle: next.subtitle });
   if (canAutoSetTitle || !next.title) next.title = titleInfo.title;
-  next.subtitle = subtitle;
+  if (!preserveHumanSummary || !forceCoreSummary) next.subtitle = subtitle;
   next.assets = Array.isArray(next.assets) ? next.assets : [];
   next.blocks = Array.isArray(next.blocks) ? next.blocks : [];
 
@@ -771,7 +796,8 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
   if (requestedCoreThemeCount && generate) {
     const themeAnchors = anchorCandidates(next, { max: requestedCoreThemeCount });
     const themePoints = coreContent.points?.length ? coreContent.points : [coreContent.summary];
-    for (let index = 0; index < requestedCoreThemeCount; index += 1) {
+    const themeCount = Math.min(requestedCoreThemeCount, themeAnchors.length);
+    for (let index = 0; index < themeCount; index += 1) {
       const anchor = themeAnchors[index] || themeAnchors[themeAnchors.length - 1];
       const brief = themePoints[index] || textOfBlock(anchor || {}) || coreContent.summary || next.title;
       const asset = addOrUpdateGenerated({
@@ -812,8 +838,11 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
 
   let generatedIndex = 0;
   let appliedBodyAdds = 0;
+  const appliedSectionPlacements = [];
   for (const placement of plan.sectionPlacements) {
     if (autoImageCount && plan.imageBudget.currentBodyImages + appliedBodyAdds >= plan.imageBudget.targetBodyImages) break;
+    const anchorIndex = next.blocks.findIndex(block => block.id === placement.anchorId);
+    if (anchorIndex >= 0 && next.blocks[anchorIndex + 1]?.type === 'image') continue;
     let assetId = placement.assetId;
     if (!assetId && generate) assetId = addOrUpdateGenerated({ role: 'section', anchorId: placement.anchorId, index: generatedIndex++, brief: placement.brief }).id;
     if (!assetId) continue;
@@ -838,7 +867,10 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
       },
       generatedBy: asset?.generated ? 'autoComposeVisuals' : undefined
     });
-    if (inserted) appliedBodyAdds += 1;
+    if (inserted) {
+      appliedBodyAdds += 1;
+      appliedSectionPlacements.push({ ...placement, placed: true });
+    }
   }
 
   const finalAssetAnalyses = next.assets.map(asset => ({ id: asset.id, name: asset.name, ...recognizeAssetContent(asset) }));
@@ -852,7 +884,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
 
   next.meta = {
     ...(next.meta || {}),
-    ...(forceCoreSummary ? { subtitleLocked: false, subtitleSource: 'core', coverCopyLocked: false, coverCopySource: 'core' } : {}),
+    ...(forceCoreSummary && !preserveHumanSummary ? { subtitleLocked: false, subtitleSource: 'core' } : {}),
     layoutMode: 'smart',
     visualPlan: {
       version: 1,
@@ -871,7 +903,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
       coverAssetId,
       generatedAssetIds: [...new Set(generatedAssetIds)],
       coreThemeImageIds,
-      placements: plan.sectionPlacements,
+      placements: generate ? appliedSectionPlacements : plan.sectionPlacements,
       hashtags: plan.hashtags || generateArticleKeywords({ title: next.title, text: source, existingKeywords: plan.keywords, max: 8 }).hashtags,
       suggestions: plan.suggestions.filter(item => !(coverAssetId && item.includes('标题封面图'))),
       provider: generate ? 'local-svg-fallback' : 'planning-only'

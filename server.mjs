@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -161,13 +161,39 @@ async function publishGuiDocument(doc, confirm = false) {
   const state = { doc, selectedId: doc.blocks[0]?.id || null, history: [{ seq: doc.meta?.revision || 1, ts: doc.meta?.updatedAt || new Date().toISOString(), label: 'GUI 导出', doc }], future: [] };
   await writeFile(dataPath, JSON.stringify(state, null, 2), 'utf8');
   try {
-    const output = execFileSync(process.execPath, [join(root, 'scripts', 'cli.mjs'), 'draft-submit', '--confirm', 'true', '--data', dataPath, '--out', outPath], { cwd: root, encoding: 'utf8', env: process.env, maxBuffer: 2_000_000 });
-    return JSON.parse(output);
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [join(root, 'scripts', 'cli.mjs'), 'draft-submit', '--confirm', 'true', '--data', dataPath, '--out', outPath], {
+        cwd: root, env: process.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']
+      });
+      let stdout = '';
+      let stderr = '';
+      const maxOutput = 2_000_000;
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error('提交处理超过 10 分钟，本机已停止等待。请先到公众号草稿箱核实是否已创建，再决定是否重试，避免重复建稿。'));
+      }, 10 * 60 * 1000);
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-maxOutput); });
+      child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-maxOutput); });
+      child.once('error', error => { clearTimeout(timeout); reject(new Error(`无法启动本机发布处理：${error.message}`)); });
+      child.once('close', code => {
+        clearTimeout(timeout);
+        if (code !== 0) return reject(new Error((stderr || stdout || `发布处理退出（${code}）`).trim()));
+        resolve(stdout);
+      });
+    });
+    const result = JSON.parse(output);
+    if (result?.delivery?.status !== 'submitted' || !result.delivery.draftId) {
+      throw new Error(result?.delivery?.error || '微信没有返回有效草稿编号，无法确认已提交；请到公众号草稿箱核实后再重试');
+    }
+    return result;
   } catch (error) {
-    const detail = error.stderr?.toString()?.trim() || error.stdout?.toString()?.trim() || error.message;
-    throw new Error(detail);
+    throw new Error(error.message || '公众号草稿提交失败');
   }
 }
+
+let guiPublishInFlight = false;
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -194,7 +220,16 @@ const server = http.createServer(async (req, res) => {
       const buffer = await readBuffer(req);
       return json(res, 200, await extractLocalDocument({ buffer, filename, contentType: req.headers['content-type'] }));
     }
-    if (raw === '/api/wechat/draft' && req.method === 'POST') { const body = await readJson(req); return json(res, 200, await publishGuiDocument(body.doc, body.confirm === true)); }
+    if (raw === '/api/wechat/draft' && req.method === 'POST') {
+      if (guiPublishInFlight) return json(res, 409, { error: '已有一篇文章正在提交，请等待本次提交结果后再操作' });
+      guiPublishInFlight = true;
+      try {
+        const body = await readJson(req);
+        return json(res, 200, await publishGuiDocument(body.doc, body.confirm === true));
+      } finally {
+        guiPublishInFlight = false;
+      }
+    }
     const file = publicFilePath(raw);
     if (!file) throw new Error('not public');
     const info = await stat(file);

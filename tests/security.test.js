@@ -81,3 +81,11 @@ test('Windows callback token is DPAPI-protected and legacy plaintext migrates', 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('Windows logon runner reuses saved configuration and treats an existing Draftloom server as healthy', async () => {
+  const runner = await readFile(new URL('../scripts/run-background.ps1', import.meta.url), 'utf8');
+  assert.match(runner, /api\/wechat\/status/);
+  assert.match(runner, /existingStatus\.remoteReady/);
+  assert.match(runner, /ConvertTo-SecureString \(\[string\]\$config\.appSecretProtected\)/);
+  assert.match(runner, /\$env:PORT = \[string\]\$port/);
+});

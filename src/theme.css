@@ -21,10 +21,8 @@
 .shell .wechat-article blockquote,.shell .wechat-article .cta,.shell .wechat-article .media{background:var(--theme-soft)}
 .shell .wechat-cover{position:relative;overflow:hidden;margin:-28px -22px 20px;min-height:112px;border-radius:0 0 8px 8px;background:var(--theme-soft)}
 .shell .wechat-cover:not(.wechat-cover-placeholder) img{display:block;width:100%;aspect-ratio:900 / 383;object-fit:cover}
-.shell .wechat-cover-copy{display:grid;gap:2px;padding:8px 12px;background:var(--theme-soft);text-align:left}
-.shell .wechat-cover-copy strong{font-size:16px;line-height:1.35;color:var(--theme-ink)}
-.shell .wechat-cover-copy span{font-size:12px;line-height:1.45;color:#75808b}
-.shell .wechat-cover-generated .wechat-cover-copy{display:none}
+.shell .wechat-cover-copy-overlay{position:absolute;inset:0;pointer-events:none}
+.shell .wechat-cover-copy-overlay img{display:block;width:100%;height:100%;object-fit:fill}
 .shell .wechat-cover-placeholder{display:grid;place-items:center;padding:20px;color:var(--theme-accent);font-size:12px;border:1px dashed color-mix(in srgb,var(--theme-accent) 50%,var(--theme-line));text-align:center}
 .shell .wechat-summary{display:grid;gap:3px;margin:10px 0 22px;padding:10px 12px;background:var(--theme-soft);border-radius:7px;font-size:13px;line-height:1.65;color:#5f6d7b}
 .shell .summary-label{font-size:11px;font-weight:700;color:var(--theme-accent)}
@@ -47,7 +45,5 @@
 .shell.theme-official .wechat-article figure.wechat-image-figure img{border:0;background:#0f1210}
 .shell.theme-official .wechat-article .article-hashtags{border-top-color:#3a433e;color:#9da9a3}
 .shell.theme-official .wechat-article .article-hashtags-list span{color:#45e48c}
-.shell.theme-official .wechat-cover-copy{background:#222725}
-.shell.theme-official .wechat-cover-copy span{color:#9da9a3}
 .shell.theme-official input,.shell.theme-official textarea,.shell.theme-official select{background:#1b201e;color:var(--theme-ink);border-color:#3a433e}
 .shell.theme-official .workflow-panel,.shell.theme-official .guidance-box,.shell.theme-official .wechat-limits{background:#171b19;color:var(--theme-ink);border-color:#3a433e}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, humanizeText, renderDocumentBody, renderArticleHtml, THEMES, normalizeTheme, autoFormatDocument, getWechatLayoutProfile } from '../src/core.js';
+import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, humanizeText, renderDocumentBody, renderArticleHtml, THEMES, normalizeTheme, autoFormatDocument, getWechatLayoutProfile, withCoverPreviewDraft } from '../src/core.js';
 import { inspectWechatArticle } from '../src/wechat-limits.js';
 
 test('parseCommand handles title and content commands', () => {
@@ -8,7 +8,39 @@ test('parseCommand handles title and content commands', () => {
   assert.deepEqual(parseCommand('智能自动化优化修改执行微信公众号发布约束'), { type:'optimizeWechat' });
   assert.deepEqual(parseCommand('添加段落：正文'), { type:'appendBlock', blockType:'paragraph', text:'正文' });
   assert.deepEqual(parseCommand('一键优化排版'), { type:'autoFormat' });
+  assert.equal(parseCommand('生成爆款标题').includeCover, false);
   assert.deepEqual(parseCommand('上移当前'), { type:'moveSelected', direction:-1 });
+});
+
+test('爆款标题只更新文章标题，不进入封面文案或封面图', () => {
+  const cover = { id: 'viral-isolated-cover', name: 'cover.png', type: 'image/png', dataUrl: 'data:image/png;base64,AA==', width: 900, height: 383, coverMain: '封面主文案', coverSub: '封面副文案' };
+  let doc = { ...createInitialDocument(), title: '原文章标题', assets: [cover], blocks: [
+    { id: 'cover-block', type: 'image', assetId: cover.id, visualRole: 'cover', text: '封面' },
+    { id: 'body-block', type: 'paragraph', text: 'AI 工具可以帮助人们解决实际问题。' }
+  ] };
+  const oldCoverBlock = doc.blocks.find(block => block.type === 'image');
+  const result = reduceDocument(doc, { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, includeCover: false, titleMode: 'viral', forceTitle: true });
+  const nextCover = result.doc.assets.find(asset => asset.id === cover.id);
+  assert.notEqual(result.doc.title, '原文章标题');
+  assert.equal(nextCover.coverMain, '封面主文案');
+  assert.equal(nextCover.coverSub, '封面副文案');
+  assert.equal(nextCover.dataUrl, cover.dataUrl);
+  assert.equal(result.doc.blocks.find(block => block.type === 'image').id, oldCoverBlock.id);
+  const preview = renderDocumentBody(result.doc);
+  assert.match(preview, /封面主文案/);
+  assert.match(preview, /封面副文案/);
+  const coverCopyLabel = preview.match(/<div class="wechat-cover-copy-overlay"[^>]*>/)?.[0] || '';
+  assert.doesNotMatch(coverCopyLabel, new RegExp(result.doc.title));
+});
+
+test('封面文案为空时不从文章标题隐式补入', () => {
+  const cover = { id: 'empty-cover-copy', name: 'cover.png', type: 'image/png', dataUrl: 'data:image/png;base64,AA==', width: 900, height: 383, coverMain: '', coverSub: '' };
+  const doc = { ...createInitialDocument(), title: '文章标题不能成为封面文案', assets: [cover], blocks: [
+    { id: 'empty-cover-block', type: 'image', assetId: cover.id, visualRole: 'cover', text: '封面' },
+    { id: 'empty-cover-body', type: 'paragraph', text: '正文。' }
+  ] };
+  const preview = renderDocumentBody(doc);
+  assert.doesNotMatch(preview, /wechat-cover-copy-overlay/);
 });
 
 test('reduceDocument updates title without mutating source', () => {
@@ -92,7 +124,7 @@ test('adding library assets appends new IDs and never overwrites an existing ass
   assert.equal(result.doc.assets.find(asset => asset.id === 'asset-2').dataUrl, incoming[1].dataUrl);
 });
 
-test('smart cover resets summary and both cover copy fields from the extracted core', () => {
+test('smart cover preserves individually human-edited summary and cover copy fields', () => {
   const cover = { id: 'stale-cover', name: '封面.png', type: 'image/png', size: 1, width: 900, height: 383, dataUrl: 'data:image/png;base64,AA==', alt: '旧封面' };
   let doc = importArticle({
     text: '# AI 写作的真正价值\n\n旧摘要不应继续沿用。\n\n真正稀缺的不是生成速度，而是判断什么值得表达。\n\n持续复盘才能让内容变得更好。',
@@ -106,16 +138,89 @@ test('smart cover resets summary and both cover copy fields from the extracted c
   const refreshedCover = result.doc.assets.find(asset => asset.id === 'stale-cover');
   const coreSummary = result.doc.meta.visualPlan.coreContent.summary;
 
-  assert.equal(result.doc.subtitle, coreSummary);
-  assert.match(result.doc.subtitle, /真正稀缺/);
-  assert.equal(refreshedCover.coverMain, result.doc.title);
-  assert.ok(coreSummary.startsWith(refreshedCover.coverSub.replace(/…$/, '')));
+  assert.equal(result.doc.subtitle, '人工旧摘要');
+  assert.equal(refreshedCover.coverMain, '旧主文案');
+  assert.equal(refreshedCover.coverSub, '旧副文案');
   assert.ok([...refreshedCover.coverSub].length <= 14);
-  assert.notEqual(refreshedCover.coverMain, '旧主文案');
-  assert.notEqual(refreshedCover.coverSub, '旧副文案');
-  assert.equal(result.doc.meta.subtitleLocked, false);
-  assert.equal(result.doc.meta.coverCopyLocked, false);
-  assert.equal(result.doc.meta.coverCopySource, 'core');
+  assert.equal(result.doc.meta.subtitleLocked, true);
+  assert.equal(result.doc.meta.coverMainLocked, true);
+  assert.equal(result.doc.meta.coverSubLocked, true);
+  assert.equal(result.doc.meta.coverCopyLocked, true);
+});
+
+test('smart cover refreshes only untouched fields and keeps cover copy distinct from summary', () => {
+  let doc = importArticle({ text: '# 智能工具如何帮助创作\n\nAI 可以降低制作成本，真正稀缺的是判断和 Idea 的价值。\n\n持续执行才能获得反馈。' });
+  doc = reduceDocument(doc, { type: 'smartCover' }).doc;
+  const coverBefore = doc.assets.find(asset => asset.id === doc.blocks[0].assetId);
+  doc = reduceDocument(doc, { type: 'setCoverCopy', field: 'main', main: '人工主标题', sub: coverBefore.coverSub }).doc;
+  doc = reduceDocument(doc, { type: 'setSubtitle', text: '人工摘要单独保留' }).doc;
+  const result = reduceDocument(doc, { type: 'generateTitleImage' });
+  const cover = result.doc.assets.find(asset => asset.id === result.doc.blocks[0].assetId);
+  assert.equal(result.doc.subtitle, '人工摘要单独保留');
+  assert.equal(cover.coverMain, '人工主标题');
+  assert.equal(result.doc.meta.coverMainLocked, true);
+  assert.equal(result.doc.meta.coverSubLocked, false);
+  assert.notEqual(cover.coverSub.replace(/…$/, '').replace(/\s+/g, ''), result.doc.subtitle.replace(/\s+/g, ''));
+});
+
+test('title image generation and WeChat optimization never overwrite any manually locked copy', () => {
+  let doc = importArticle({ text: '# 自动化标题\n\n智能工具能够降低重复劳动，作者仍需判断什么值得表达。'.repeat(8) });
+  doc = reduceDocument(doc, { type: 'smartCover' }).doc;
+  const cover = doc.assets.find(asset => asset.id === doc.blocks[0].assetId);
+  doc = reduceDocument(doc, { type: 'setCoverCopy', field: 'sub', main: cover.coverMain, sub: '人工副文案' }).doc;
+  doc = reduceDocument(doc, { type: 'setSubtitle', text: '人工摘要优先' }).doc;
+  const editedCover = doc.assets.find(asset => asset.id === doc.blocks[0].assetId);
+  const generated = reduceDocument(doc, { type: 'generateTitleImage' }).doc;
+  const regeneratedCover = generated.assets.find(asset => asset.id === generated.blocks[0].assetId);
+  assert.equal(generated.subtitle, '人工摘要优先');
+  assert.equal(regeneratedCover.coverSub, '人工副文案');
+  assert.equal(regeneratedCover.dataUrl, editedCover.dataUrl);
+  assert.ok(decodeURIComponent(regeneratedCover.dataUrl).includes('人工副文案'));
+  const optimized = reduceDocument(generated, { type: 'optimizeWechat' }).doc;
+  assert.equal(optimized.subtitle, '人工摘要优先');
+  assert.equal(optimized.assets.find(asset => asset.id === optimized.blocks[0].assetId).coverSub, '人工副文案');
+});
+
+test('人工输入的封面副文案即使与摘要相同也照常显示', () => {
+  let doc = importArticle({ text: '# 标题\n\n一段足够清楚的文章正文，用于测试封面副文案与摘要的显示优先级。' });
+  doc = reduceDocument(doc, { type: 'smartCover' }).doc;
+  doc = reduceDocument(doc, { type: 'setSubtitle', text: '共同文案' }).doc;
+  const cover = doc.assets.find(asset => asset.id === doc.blocks[0].assetId);
+  doc = reduceDocument(doc, { type: 'setCoverCopy', field: 'sub', main: cover.coverMain, sub: '共同文案' }).doc;
+  const preview = renderDocumentBody(doc);
+  const coverAsset = doc.assets.find(asset => asset.id === doc.blocks[0].assetId);
+  assert.ok(decodeURIComponent(coverAsset.dataUrl).includes('共同文案'));
+  assert.doesNotMatch(preview, /wechat-cover-copy-overlay/);
+});
+
+test('封面字段实时预览覆盖在封面图上，发布 HTML 不在封面下方重复展示', () => {
+  const cover = { id: 'cover-copy-preview', name: '封面.png', type: 'image/png', dataUrl: 'data:image/png;base64,AA==', width: 900, height: 383, coverMain: '旧主文案', coverSub: '旧副文案' };
+  const doc = importArticle({ text: '# 文章标题\n\n文章正文内容。', assets: [cover] });
+  const previewCover = { ...cover, coverMain: '当前主文案', coverSub: '当前副文案' };
+  const previewDoc = { ...doc, assets: doc.assets.map(asset => asset.id === cover.id ? previewCover : asset) };
+  const preview = renderDocumentBody(previewDoc);
+  const html = renderArticleHtml(previewDoc);
+  assert.match(preview, /wechat-cover-copy-overlay[\s\S]*当前主文案[\s\S]*当前副文案/);
+  assert.doesNotMatch(preview, /<figcaption class="wechat-cover-copy"/);
+  assert.doesNotMatch(html, /当前主文案|当前副文案|<figcaption[^>]*>[^<]*<strong/);
+  assert.match(html, /data-wechat-cover="true"/);
+});
+
+test('manual cover fields remain independent across optimization and cover replacement', () => {
+  let doc = importArticle({ text: '# 本地创作工具\n\n本地创作工具可以帮助作者保持稳定的表达节奏。\n\n文章排版也要让手机阅读更加舒适。' });
+  doc = reduceDocument(doc, { type: 'smartCover' }).doc;
+  const oldCover = doc.assets.find(asset => asset.id === doc.blocks[0].assetId);
+  doc = reduceDocument(doc, { type: 'setCoverCopy', field: 'sub', main: oldCover.coverMain, sub: '人工副标题' }).doc;
+  const other = { id: 'replacement-cover', name: '人工素材', type: 'image/png', dataUrl: 'data:image/png;base64,AA==', width: 900, height: 383 };
+  doc = reduceDocument(doc, { type: 'addAssets', assets: [other] }).doc;
+  doc = reduceDocument(doc, { type: 'setCoverAsset', assetId: other.id }).doc;
+  let currentCover = doc.assets.find(asset => asset.id === other.id);
+  assert.equal(currentCover.coverSub, '人工副标题');
+  const optimized = reduceDocument(doc, { type: 'optimizeWechat' });
+  currentCover = optimized.doc.assets.find(asset => asset.id === other.id);
+  assert.equal(currentCover.coverSub, '人工副标题');
+  assert.equal(optimized.doc.meta.coverSubLocked, true);
+  assert.equal(optimized.doc.meta.coverMainLocked, false);
 });
 
 test('title image action extracts core content without replacing the current title', () => {
@@ -193,8 +298,18 @@ test('智能优化同步封面文案，并在预览中单独显示封面与内�
   assert.match(preview, /data-wechat-summary="true"/);
   assert.match(html, /data-wechat-cover="true"/);
   assert.match(html, /内容摘要/);
-  assert.equal((preview.match(/data:image/g) || []).length, 1);
+  assert.equal((preview.match(/src="data:image\/png/g) || []).length, 1);
   assert.equal((preview.match(/封面/g) || []).length >= 1, true);
+});
+
+test('没有封面素材时，手工编辑摘要仍即时进入右侧文章预览', () => {
+  const doc = { ...importArticle({ text: '# 没有封面的文章\n\n正文内容。' }), assets: [] };
+  const originalSummary = doc.subtitle;
+  const previewDoc = withCoverPreviewDraft(doc, { summary: '正在编辑中的人工摘要' });
+  const preview = renderDocumentBody(previewDoc);
+  assert.match(preview, /正在编辑中的人工摘要/);
+  assert.equal(doc.subtitle, originalSummary);
+  assert.match(preview, /wechat-cover-placeholder/);
 });
 
 test('微信 HTML keeps many short paragraphs below the API character limit without deleting visible text', () => {
@@ -284,9 +399,18 @@ test('one-click layout guidance groups local recommendations and keeps commands'
   assert.deepEqual(report.sections.map(section => section.key), ['hierarchy', 'images', 'titles', 'recommendations']);
   assert.ok(report.sections.find(section => section.key === 'hierarchy').items.some(item => item.command.includes('改成标题')));
   assert.ok(report.sections.find(section => section.key === 'images').items.length >= 1);
-  assert.equal(report.sections.find(section => section.key === 'titles').items.length, 5);
-  assert.ok(report.sections.find(section => section.key === 'titles').items.every(item => item.command.startsWith('标题：')));
+  assert.ok(report.sections.find(section => section.key === 'titles').items.length >= 1);
+  assert.ok(report.sections.find(section => section.key === 'titles').items.every(item => item.command.startsWith('标题：') && item.text.includes('正文依据')));
   assert.equal(JSON.stringify(doc), before);
+});
+
+test('layout guidance ignores legacy or stale title candidates and rebuilds from current body evidence', () => {
+  const doc = importArticle({ text: '当前正文\n\n当前正文的核心结论是先核实事实，再据此给出行动建议。\n\n这句话补充文章的实际背景和适用范围。\n\n最后说明可以如何开始执行。' });
+  doc.meta.titlePlan = { mode: 'viral', applied: true, candidates: [{ title: '虚构的爆款标题', rationale: '没有正文依据' }] };
+  const titleItems = generateLayoutGuidance(doc).sections.find(section => section.key === 'titles').items;
+  assert.ok(titleItems.length > 0);
+  assert.ok(titleItems.every(item => !item.text.includes('虚构的爆款标题')));
+  assert.ok(titleItems.every(item => item.text.includes('正文依据')));
 });
 
 test('natural language supports component creation and conversion', () => {
@@ -368,10 +492,78 @@ test('一键优化公众号排版会统一字体节奏并保留局部重点标�
   const html = renderArticleHtml(result.doc);
   assert.match(html, /font-family:/);
   assert.match(html, /margin:18px 0/);
-  assert.match(html, /background:#fff1cf/);
+  assert.match(html, /<span style="background:#fff1cf;color:#303a43;font-weight:700/);
+  assert.doesNotMatch(html, /<mark\b/);
+  assert.match(renderDocumentBody(result.doc), /<mark class="inline-emphasis">/);
+  const darkHtml = renderArticleHtml({ ...result.doc, theme: 'official' });
+  assert.match(darkHtml, /<span style="background:rgba\(25,216,117,\.16\);color:#19d875;font-weight:700/);
   const repeat = reduceDocument(result.doc, { type: 'autoFormat' });
   assert.equal(repeat.changed, false);
   assert.ok(autoFormatDocument(result.doc).stats.highlightedRanges >= 1);
+});
+
+test('一键排版会把相邻配图拆开，并用正文区块形成阅读间隔', () => {
+  const doc = createInitialDocument();
+  doc.blocks = [
+    { id: 'text-1', type: 'paragraph', text: '第一段正文提供足够的信息，让图片之间保持清晰的阅读节奏。' },
+    { id: 'image-1', type: 'image', assetId: 'asset-1' },
+    { id: 'image-2', type: 'image', assetId: 'asset-2' },
+    { id: 'text-2', type: 'paragraph', text: '第二段正文补充说明图片主题，并让阅读顺序自然衔接。' }
+  ];
+  const result = autoFormatDocument(doc);
+  const imageIndexes = result.doc.blocks.map((block, index) => block.type === 'image' ? index : -1).filter(index => index >= 0);
+  assert.equal(imageIndexes.length, 2);
+  assert.equal(result.doc.blocks[imageIndexes[1] - 1].type, 'paragraph');
+  assert.deepEqual(result.doc.blocks.filter(block => block.type !== 'image').map(block => block.id), ['text-1', 'text-2']);
+  assert.ok(result.changes.some(change => change.includes('相邻配图')));
+});
+
+test('相邻图片不能越过新章节标题迁移', () => {
+  const doc = createInitialDocument();
+  doc.blocks = [
+    { id: 'section-one', type: 'heading', text: '第一章', level: 2 },
+    { id: 'body-one', type: 'paragraph', text: '第一章正文有足够长度，可以用于解释当前章节的主要观点。' },
+    { id: 'image-one', type: 'image', assetId: 'asset-1' },
+    { id: 'image-two', type: 'image', assetId: 'asset-2' },
+    { id: 'section-two', type: 'heading', text: '第二章', level: 2 },
+    { id: 'body-two', type: 'paragraph', text: '第二章正文说明另外一个主题，不应被移动到第一章图片之间。' }
+  ];
+  const result = autoFormatDocument(doc);
+  assert.deepEqual(result.doc.blocks.map(block => block.id), doc.blocks.map(block => block.id));
+  assert.ok(result.changes.some(change => change.includes('避免跨章移动')));
+});
+
+test('三张连续图片只按本章可用正文分配间隔并准确报告剩余图片对', () => {
+  const doc = createInitialDocument();
+  doc.blocks = [
+    { id: 'section-one', type: 'heading', text: '第一章', level: 2 },
+    { id: 'image-one', type: 'image', assetId: 'asset-1' },
+    { id: 'image-two', type: 'image', assetId: 'asset-2' },
+    { id: 'image-three', type: 'image', assetId: 'asset-3' },
+    { id: 'body-one', type: 'paragraph', text: '第一段正文足够长，可以作为第一张图片与后续图片之间的自然间隔。' },
+    { id: 'body-two', type: 'paragraph', text: '第二段正文继续补充信息，可以作为后续图片之间的另一个阅读间隔。' },
+    { id: 'section-two', type: 'heading', text: '第二章', level: 2 },
+    { id: 'body-three', type: 'paragraph', text: '第二章正文不应被移动到第一章中。' }
+  ];
+  const result = autoFormatDocument(doc);
+  const imageIds = result.doc.blocks.filter(block => block.type === 'image').map(block => block.id);
+  assert.deepEqual(imageIds, ['image-one', 'image-two', 'image-three']);
+  assert.equal(result.doc.blocks.some((block, index) => block.type === 'image' && result.doc.blocks[index + 1]?.type === 'image'), false);
+  assert.deepEqual(result.doc.blocks.filter(block => block.type !== 'image').map(block => block.id), doc.blocks.filter(block => block.type !== 'image').map(block => block.id));
+
+  const limited = createInitialDocument();
+  limited.blocks = [
+    { id: 'section', type: 'heading', text: '一章', level: 2 },
+    { id: 'a', type: 'image', assetId: 'a' },
+    { id: 'b', type: 'image', assetId: 'b' },
+    { id: 'c', type: 'image', assetId: 'c' },
+    { id: 'only-body', type: 'paragraph', text: '本章只有这一段正文内容可以作为间隔，因此不应跨过章节边界借用下一章文字。' },
+    { id: 'next-section', type: 'heading', text: '二章', level: 2 },
+    { id: 'next-body', type: 'paragraph', text: '不可跨入下一章借用正文作为间隔。' }
+  ];
+  const limitedResult = autoFormatDocument(limited);
+  assert.ok(limitedResult.changes.some(change => change.includes('仍有 1 对相邻配图无法分隔')));
+  assert.ok(limitedResult.doc.blocks.findIndex(block => block.id === 'c') < limitedResult.doc.blocks.findIndex(block => block.id === 'next-section'));
 });
 test('import creates list, table and CTA semantic blocks', () => {
   const doc = importArticle({ text: '# 标题\n\n- 甲\n- 乙\n\n|列A|列B|\n|---|---|\n|值1|值2|\n\n:::cta\ntext: 继续阅读\nbutton: 打开\n:::' });

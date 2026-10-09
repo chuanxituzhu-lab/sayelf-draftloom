@@ -93,6 +93,21 @@ export function renderCoverSvg({ main = '', sub = '', bg = '#0f172a', fg = '#fff
 </svg>`;
 }
 
+/** Local-only copy layer for user-supplied cover images. */
+export function renderCoverCopyOverlaySvg({ main = '', sub = '', width = COVER_SPEC.headline.w, height = COVER_SPEC.headline.h } = {}) {
+  const safeWidth = Math.max(1, Number(width) || COVER_SPEC.headline.w);
+  const safeHeight = Math.max(1, Number(height) || COVER_SPEC.headline.h);
+  const mainText = String(main || '').trim();
+  const subText = String(sub || '').trim();
+  if (!mainText && !subText) return '';
+  const pad = Math.round(safeWidth * 0.055);
+  const mainSize = Math.max(20, Math.min(58, Math.round(safeWidth / Math.max([...mainText].length, 10) * 0.66)));
+  const subSize = Math.max(16, Math.min(28, Math.round(mainSize * 0.46)));
+  const subY = safeHeight - Math.round(safeHeight * 0.085);
+  const mainY = subText ? subY - Math.round(mainSize * 1.18) : subY;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${safeWidth}" height="${safeHeight}" viewBox="0 0 ${safeWidth} ${safeHeight}"><defs><linearGradient id="cover-copy-shade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#07120f" stop-opacity="0"/><stop offset="1" stop-color="#07120f" stop-opacity=".78"/></linearGradient></defs><rect width="${safeWidth}" height="${safeHeight}" fill="url(#cover-copy-shade)"/><g font-family="'PingFang SC','Microsoft YaHei',sans-serif" fill="#fff" text-anchor="start" paint-order="stroke" stroke="#101713" stroke-opacity=".32" stroke-width="2" stroke-linejoin="round"><text x="${pad}" y="${mainY}" font-size="${mainSize}" font-weight="700">${esc(mainText)}</text>${subText ? `<text x="${pad}" y="${subY}" font-size="${subSize}" font-weight="500">${esc(subText)}</text>` : ''}</g></svg>`;
+}
+
 // 尺寸/大小体检：对“用户自带的封面图”做规范校验，返回可操作结论
 // input: { width, height, bytes }
 export function auditCoverImage({ width = 0, height = 0, bytes = 0 } = {}) {

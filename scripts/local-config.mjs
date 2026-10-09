@@ -41,6 +41,12 @@ export function loadProtectedLocalConfig(root) {
 }
 
 export function applyProtectedLocalConfig(root) {
+  // Explicit process configuration is authoritative; avoid starting PowerShell
+  // to decrypt a stored secret when credentials and the listener port are all
+  // already supplied by the caller (for example, a supervised server process).
+  if ((process.env.WECHAT_APP_ID || process.env.WX_APPID)
+    && (process.env.WECHAT_APP_SECRET || process.env.WX_APPSECRET)
+    && process.env.PORT) return null;
   const value = loadProtectedLocalConfig(root);
   if (!value) return null;
   if (!process.env.WECHAT_APP_ID) process.env.WECHAT_APP_ID = value.appId;

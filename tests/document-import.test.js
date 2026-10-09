@@ -128,7 +128,8 @@ test('article emphasis detects important and numbered sections and renders a col
   assert.equal(document.blocks[0].emphasis, 'inline');
   assert.ok(document.blocks[0].emphasisRanges[0].end < document.blocks[0].text.length);
   assert.equal(document.blocks[1].emphasis, undefined);
-  assert.match(renderArticleHtml(document), /<mark style="background:#fff1cf/);
+  assert.match(renderArticleHtml(document), /<span style="background:#fff1cf;color:#303a43/);
+  assert.doesNotMatch(renderArticleHtml(document), /<mark\b/);
   assert.doesNotMatch(renderArticleHtml(document), /font-weight:700;color:#17212b;background:#fff7e8/);
 });
 

@@ -1,6 +1,7 @@
 import { autoComposeDocument, createCreativeAsset, generateArticleKeywords, generateViralTitlePlan, planVisualLayout, summarizeArticle } from './visuals.js';
 import { WECHAT_LIMITS, inspectWechatArticle, charCount, truncateByChars } from './wechat-limits.js';
 import { applyArticleEmphasis, sanitizeImportedDocument } from './document-import.js';
+import { renderCoverCopyOverlaySvg } from './cover.js';
 
 export const MAX_HISTORY = 50;
 
@@ -266,9 +267,50 @@ export function autoFormatDocument(doc = {}) {
     });
   });
 
+  let separatedImages = 0;
+  let regionStart = 0;
+  while (regionStart < formattedBlocks.length) {
+    let regionEnd = regionStart;
+    while (regionEnd < formattedBlocks.length && (regionEnd === regionStart || formattedBlocks[regionEnd].type !== 'heading')) regionEnd += 1;
+    let index = regionStart;
+    while (index < regionEnd) {
+      if (formattedBlocks[index].type !== 'image') { index += 1; continue; }
+      const runStart = index;
+      while (index < regionEnd && formattedBlocks[index].type === 'image') index += 1;
+      const runEnd = index;
+      const runLength = runEnd - runStart;
+      if (runLength < 2) continue;
+      const slots = [];
+      for (let candidate = runEnd; candidate < regionEnd; candidate += 1) {
+        const block = formattedBlocks[candidate];
+        if (['paragraph', 'quote', 'list'].includes(block.type)
+          && normalizeLayoutText(block.text || (block.items || []).join(' ')).length >= 24) slots.push(block.id);
+      }
+      const moveCount = Math.min(runLength - 1, slots.length);
+      for (let offset = 0; offset < moveCount; offset += 1) {
+        const imageId = formattedBlocks[runStart + runLength - 1 - offset].id;
+        const targetId = slots[slots.length - 1 - offset];
+        const [imageBlock] = formattedBlocks.splice(formattedBlocks.findIndex(block => block.id === imageId), 1);
+        const targetIndex = formattedBlocks.findIndex(block => block.id === targetId);
+        formattedBlocks.splice(targetIndex + 1, 0, imageBlock);
+        separatedImages += 1;
+      }
+      index = runStart + 1;
+      regionEnd = formattedBlocks.findIndex((block, candidate) => candidate > runStart && block.type === 'heading');
+      if (regionEnd < 0) regionEnd = formattedBlocks.length;
+    }
+    regionStart = regionEnd + 1;
+  }
+  let remainingAdjacentImagePairs = 0;
+  for (let index = 1; index < formattedBlocks.length; index += 1) {
+    if (formattedBlocks[index - 1]?.type === 'image' && formattedBlocks[index]?.type === 'image') remainingAdjacentImagePairs += 1;
+  }
+
   if (normalizedBlocks) changes.push(`已统一 ${normalizedBlocks} 个区块的空格与段落间距`);
   if (splitCount) changes.push(`已将 ${splitCount} 处过长段落拆分为手机友好的阅读节奏`);
   if (promotedHeadings) changes.push(`已识别并整理 ${promotedHeadings} 个章节提示为标题层级`);
+  if (separatedImages) changes.push(`已调整 ${separatedImages} 处相邻配图，让图片与正文段落交替呈现`);
+  if (remainingAdjacentImagePairs) changes.push(`仍有 ${remainingAdjacentImagePairs} 对相邻配图无法分隔（当前章节没有足够正文段落），已保留顺序以避免跨章移动`);
   next.blocks = formattedBlocks;
   next.theme = normalizeTheme(next.theme);
   const profile = getWechatLayoutProfile(next);
@@ -569,8 +611,12 @@ export function getLayoutGuidance(doc) {
   if (missing.length) suggestions.push({ level: 'error', text: `有 ${missing.length} 个图片引用未匹配素材，请补充同名文件。`, command: '' });
   const componentCount = doc.blocks.filter(block => ['table', 'cta', 'gallery', 'media'].includes(block.type)).length;
   if (componentCount > 4) suggestions.push({ level: 'review', text: '高级组件较多，建议检查信息密度和手机端滚动节奏。', command: '下移当前' });
-  if (doc.meta?.titlePlan?.candidates?.length && doc.meta.titlePlan.applied !== false && doc.meta.titleLocked !== true) {
-    suggestions.push({ level: 'review', text: `已生成 ${doc.meta.titlePlan.candidates.length} 个爆款标题候选，发布前请选择或确认一个。`, command: '爆款标题' });
+  const currentBody = doc.blocks.filter(block => block.type !== 'image').map(guidanceBlockText).filter(Boolean).join('\n');
+  const supportedTitleCandidates = doc.meta?.titlePlan?.strategy === 'conclusion-first-hook'
+    ? (doc.meta.titlePlan.candidates || []).filter(item => item.evidence?.source === 'article-body' && item.evidence.sentence && currentBody.includes(item.evidence.sentence))
+    : [];
+  if (supportedTitleCandidates.length && doc.meta.titlePlan.applied !== false && doc.meta.titleLocked !== true) {
+    suggestions.push({ level: 'review', text: `已生成 ${supportedTitleCandidates.length} 个结论先行标题候选，并附正文依据；发布前请选择或确认一个。`, command: '标题候选' });
   }
   for (const hint of (doc.meta?.visualPlan?.suggestions || []).slice(0, 3)) suggestions.push({ level: 'review', text: hint, command: '智能配图' });
   if (!suggestions.length) suggestions.push({ level: 'ok', text: '当前结构适合继续人工微调。', command: '' });
@@ -604,8 +650,12 @@ export function generateLayoutGuidance(doc = {}) {
   const storedPlan = doc.meta?.visualPlan;
   const fallbackPlan = planVisualLayout(doc, { includeCover: false, autoImageCount: true, maxGenerated: 0 });
   const imagePlan = storedPlan?.placements?.length ? storedPlan : fallbackPlan;
-  const titlePlan = doc.meta?.titlePlan?.candidates?.length
-    ? doc.meta.titlePlan
+  const storedTitlePlan = doc.meta?.titlePlan;
+  const supportedStoredCandidates = storedTitlePlan?.strategy === 'conclusion-first-hook'
+    ? (storedTitlePlan.candidates || []).filter(item => item.evidence?.source === 'article-body' && item.evidence.sentence && source.includes(item.evidence.sentence))
+    : [];
+  const titlePlan = supportedStoredCandidates.length
+    ? { ...storedTitlePlan, candidates: supportedStoredCandidates }
     : generateViralTitlePlan({ text: source, filename: doc.meta?.importedFrom || '', currentTitle: doc.title || '', keywords: imagePlan?.keywords || [], limit: 5 });
 
   const hierarchy = [];
@@ -662,12 +712,12 @@ export function generateLayoutGuidance(doc = {}) {
 
   const titles = (titlePlan?.candidates || []).slice(0, 5).map((candidate, index) => ({
     level: 'review',
-    text: `候选 ${index + 1}：${candidate.title}${candidate.rationale ? `（${candidate.rationale}）` : ''}`,
+    text: `候选 ${index + 1}：${candidate.title}${candidate.rationale ? `（${candidate.rationale}）` : ''}${candidate.evidence?.sentence ? ` 正文依据：“${candidate.evidence.sentence}”` : ''}`,
     command: `标题：${candidate.title}`
   }));
-  if (!titles.length) titles.push({ level: 'warning', text: '文章内容不足，暂时无法生成有依据的爆款标题。', command: '' });
+  if (!titles.length) titles.push({ level: 'warning', text: '正文缺少足够的核心句，暂不生成标题建议；请补充正文后再试。', command: '' });
 
-  const consumed = [/缺少章节层级/, /建议将第 .*提炼为章节标题/, /当前有 \d+ 张图片/, /爆款标题候选/, /图片内容/];
+  const consumed = [/缺少章节层级/, /建议将第 .*提炼为章节标题/, /当前有 \d+ 张图片/, /标题候选/, /图片内容/];
   const recommendations = getLayoutGuidance(doc)
     .filter(item => !consumed.some(pattern => pattern.test(item.text)))
     .slice(0, 6)
@@ -677,7 +727,7 @@ export function generateLayoutGuidance(doc = {}) {
   const sections = [
     { key: 'hierarchy', title: '章节层级', items: hierarchy },
     { key: 'images', title: '图片位置与内容', items: images },
-    { key: 'titles', title: '爆款标题', items: titles },
+    { key: 'titles', title: '标题建议', items: titles },
     { key: 'recommendations', title: '综合建议', items: recommendations }
   ];
   return {
@@ -874,15 +924,17 @@ export function optimizeWechatDocument(doc) {
   }
   const author = fitWechatText(next.author || '', WECHAT_LIMITS.authorChars);
   if (author.changed) { next.author = author.value; changes.push(`作者已压缩到 ${WECHAT_LIMITS.authorChars} 字内`); }
+  const humanSummaryLocked = next.meta?.subtitleLocked === true || next.meta?.subtitleSource === 'human';
   const digest = fitWechatText(next.subtitle || '', WECHAT_LIMITS.digestChars);
-  if (digest.changed) { next.subtitle = digest.value; changes.push(`摘要已压缩到 ${WECHAT_LIMITS.digestChars} 字内`); }
+  if (digest.changed && !humanSummaryLocked) { next.subtitle = digest.value; changes.push(`摘要已压缩到 ${WECHAT_LIMITS.digestChars} 字内`); }
+  if (digest.changed && humanSummaryLocked) changes.push('人工摘要已保留；超出公众号摘要限制，需人工确认');
   const originalBody = clone(next.blocks || []);
   const originalValidation = inspectWechatArticle({ title: next.title, author: next.author || '', digest: next.subtitle || '', content: renderArticleHtml(next) });
   const originalBodyTooLong = originalValidation.errors.some(item => item.id === 'contentChars' || item.id === 'contentBytes');
   const seriesPlan = originalBodyTooLong ? buildWechatSeriesPlan({ ...next, blocks: originalBody }) : null;
   const distillation = distillWechatBody(next);
   if (distillation.changed) changes.push(`正文已蒸馏提炼 ${distillation.changedBlocks} 个区块，保留结构与原稿`);
-  if (next.meta?.subtitleLocked !== true && ['default', 'auto', undefined].includes(next.meta?.subtitleSource)) {
+  if (!humanSummaryLocked && ['default', 'auto', undefined].includes(next.meta?.subtitleSource)) {
     const bodyText = (next.blocks || []).filter(block => block.type !== 'image').map(block => block.text || (block.items || []).join('；')).filter(Boolean).join('\n');
     const distilledSummary = summarizeArticle({ text: bodyText, title: next.title, max: WECHAT_LIMITS.digestChars });
     if (distilledSummary && distilledSummary !== next.subtitle) {
@@ -893,9 +945,14 @@ export function optimizeWechatDocument(doc) {
   }
   const coverBlock = next.blocks.find(block => block.type === 'image' && (block.visualRole === 'cover' || block.id === next.blocks.find(item => item.type === 'image')?.id));
   const coverAsset = coverBlock ? next.assets.find(asset => asset.id === coverBlock.assetId) : null;
-  if (coverAsset && next.meta?.coverCopyLocked !== true) {
-    const coverMain = fitWechatText(next.title || coverAsset.alt || '', WECHAT_LIMITS.titleImage.mainChars).value;
-    const coverSub = fitWechatText(next.subtitle || '', WECHAT_LIMITS.titleImage.subChars).value;
+  const legacyCoverLock = next.meta?.coverCopyLocked === true && next.meta?.coverMainLocked === undefined && next.meta?.coverSubLocked === undefined;
+  if (coverAsset && (!legacyCoverLock && (next.meta?.coverCopyLocked !== true || next.meta?.coverMainLocked === false || next.meta?.coverSubLocked === false))) {
+    const coverMain = legacyCoverLock || next.meta?.coverMainLocked === true
+      ? coverAsset.coverMain
+      : fitWechatText(next.title || coverAsset.alt || '', WECHAT_LIMITS.titleImage.mainChars).value;
+    const coverSub = legacyCoverLock || next.meta?.coverSubLocked === true
+      ? coverAsset.coverSub
+      : fitWechatText(next.subtitle || '', WECHAT_LIMITS.titleImage.subChars).value;
     const copyChanged = coverAsset.coverMain !== coverMain || coverAsset.coverSub !== coverSub;
     const generatedNeedsRefresh = coverAsset.generated && coverAsset.source === 'draftloom:creative-local' && coverAsset.theme !== next.theme;
     if (copyChanged || generatedNeedsRefresh) {
@@ -965,7 +1022,7 @@ export function parseCommand(input) {
   // accidentally append the phrase as a paragraph. Use “封面一键设置”.
   if (/^封面一键入库$/i.test(raw)) return { type: 'noop' };
   if (/^(?:封面一键设置|一键设置封面|智能设置封面|自动设置封面)$/i.test(raw)) return { type: 'smartCover' };
-  if (/^(?:爆款标题|智能标题|生成爆款标题)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, titleMode: 'viral', forceTitle: true };
+  if (/^(?:爆款标题|智能标题|生成爆款标题)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, includeCover: false, titleMode: 'viral', forceTitle: true };
   if (/^(?:智能自动化)?(?:优化|修正|调整)(?:修改)?(?:执行)?(?:微信公众号|微信|公众号)?(?:发布)?(?:约束|限制)$/i.test(raw) || /^(?:智能优化|自动优化)(?:微信|公众号)?(?:发布)?(?:约束|限制)$/i.test(raw)) return { type: 'optimizeWechat' };
   if (/^(?:图片智能导入|图片自动导入|自动导入图片|自动填充图片|自动填充素材)$/i.test(raw)) return { type: 'autoComposeVisuals', generate: false, maxGenerated: 0, autoImageCount: true, fillUnmatched: true, titleMode: 'safe' };
   if ((m = raw.match(/^删除(?:当前|选中)(?:块|段落|内容)?$/i))) return { type: 'deleteSelected' };
@@ -1080,7 +1137,7 @@ export function reduceDocument(doc, intent, selectedId = null) {
       const refreshed = syncCoverCopyFromCore(composed);
       const coverAssetId = refreshed.meta?.visualPlan?.coverAssetId;
       if (coverAssetId) {
-        const coverResult = reduceDocument(refreshed, { type: 'setCoverAsset', assetId: coverAssetId }, selectedId);
+        const coverResult = reduceDocument(refreshed, { type: 'setCoverAsset', assetId: coverAssetId, preserveCoverCopy: true }, selectedId);
         return { doc: coverResult.doc, selectedId: coverResult.selectedId, changed: true };
       }
       return { doc: refreshed, selectedId: refreshed.blocks[0]?.id || selectedId, changed: true };
@@ -1095,7 +1152,8 @@ export function reduceDocument(doc, intent, selectedId = null) {
         fillUnmatched: false,
         useCoreForCover: true
       });
-      return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
+      const refreshed = syncCoverCopyFromCore(composed);
+      return { doc: refreshed, selectedId: refreshed.blocks[0]?.id || selectedId, changed: true };
     }
     case 'generateCoreThemeImages': {
       const count = Math.min(4, Math.max(1, Number(intent.count) || 2));
@@ -1189,6 +1247,20 @@ export function reduceDocument(doc, intent, selectedId = null) {
       if (existingIndex >= 0) next.blocks.splice(existingIndex, 1);
       next.blocks.unshift(coverBlock);
       asset.visualRole = 'cover';
+      const lockedMain = next.meta?.coverMainLocked === true || (next.meta?.coverCopyLocked === true && next.meta?.coverMainLocked === undefined);
+      const lockedSub = next.meta?.coverSubLocked === true || (next.meta?.coverCopyLocked === true && next.meta?.coverSubLocked === undefined);
+      if (lockedMain || lockedSub) {
+        const previousBlock = doc.blocks.find(block => block.type === 'image' && (block.visualRole === 'cover' || block.id === doc.blocks.find(item => item.type === 'image')?.id));
+        const previousAsset = previousBlock && next.assets.find(item => item.id === previousBlock.assetId);
+        if (previousAsset && previousAsset.id !== asset.id) {
+          if (lockedMain) asset.coverMain = previousAsset.coverMain;
+          if (lockedSub) asset.coverSub = previousAsset.coverSub;
+          if (asset.generated && asset.source === 'draftloom:creative-local') {
+            const refreshed = createCreativeAsset({ id: asset.id, title: asset.coverMain, subtitle: asset.coverSub, keywords: next.meta?.visualPlan?.keywords || [], theme: next.theme, role: 'cover' });
+            Object.assign(asset, { ...refreshed, recognition: asset.recognition });
+          }
+        }
+      }
       next.meta = {
         ...(next.meta || {}),
         visualPlan: {
@@ -1196,7 +1268,7 @@ export function reduceDocument(doc, intent, selectedId = null) {
           coverAssetId: asset.id,
           provider: asset.source || next.meta?.visualPlan?.provider || 'local'
         },
-        coverCopyLocked: false
+        ...(intent.preserveCoverCopy || lockedMain || lockedSub ? {} : { coverMainLocked: false, coverSubLocked: false, coverCopyLocked: false })
       };
       break;
     }
@@ -1205,11 +1277,26 @@ export function reduceDocument(doc, intent, selectedId = null) {
       if (!coverAsset) return { doc, selectedId, changed: false, error: '请先设置封面素材' };
       const main = fitWechatText(intent.main ?? coverAsset.coverMain ?? next.title ?? '', WECHAT_LIMITS.titleImage.mainChars).value;
       const sub = fitWechatText(intent.sub ?? coverAsset.coverSub ?? next.subtitle ?? '', WECHAT_LIMITS.titleImage.subChars).value;
-      if (coverAsset.coverMain === main && coverAsset.coverSub === sub) return { doc, selectedId, changed: false };
-      coverAsset.coverMain = main;
-      coverAsset.coverSub = sub;
+      const field = ['main', 'sub'].includes(intent.field) ? intent.field : null;
+      const lockMain = field === null || field === 'main';
+      const lockSub = field === null || field === 'sub';
+      const nextMain = lockMain ? main : coverAsset.coverMain;
+      const nextSub = lockSub ? sub : coverAsset.coverSub;
+      if (coverAsset.coverMain === nextMain && coverAsset.coverSub === nextSub
+        && (!lockMain || next.meta?.coverMainLocked === true) && (!lockSub || next.meta?.coverSubLocked === true)) return { doc, selectedId, changed: false };
+      coverAsset.coverMain = nextMain;
+      coverAsset.coverSub = nextSub;
       coverAsset.visualRole = 'cover';
-      next.meta = { ...(next.meta || {}), coverCopyLocked: true };
+      if (coverAsset.generated && coverAsset.source === 'draftloom:creative-local') {
+        const refreshed = createCreativeAsset({ id: coverAsset.id, title: nextMain, subtitle: nextSub, keywords: next.meta?.visualPlan?.keywords || [], theme: next.theme, role: 'cover' });
+        Object.assign(coverAsset, { ...refreshed, recognition: coverAsset.recognition, coverMain: nextMain, coverSub: nextSub });
+      }
+      next.meta = {
+        ...(next.meta || {}),
+        ...(lockMain ? { coverMainLocked: true, coverMainSource: 'human' } : {}),
+        ...(lockSub ? { coverSubLocked: true, coverSubSource: 'human' } : {}),
+        coverCopyLocked: lockMain && lockSub
+      };
       break;
     }
     case 'addAssets': {
@@ -1332,7 +1419,7 @@ function imageDataAttributes(asset = {}) {
 }
 
 /** Render only the detected editorial ranges, keeping the surrounding text plain. */
-export function renderInlineEmphasis(value = '', ranges = [], { markAttrs = ' class="inline-emphasis"', strongAttrs = ' class="inline-emphasis"' } = {}) {
+export function renderInlineEmphasis(value = '', ranges = [], { markAttrs = ' class="inline-emphasis"', strongAttrs = ' class="inline-emphasis"', markTag = 'mark' } = {}) {
   const text = String(value ?? '');
   const ordered = (Array.isArray(ranges) ? ranges : [])
     .map(range => ({
@@ -1347,7 +1434,7 @@ export function renderInlineEmphasis(value = '', ranges = [], { markAttrs = ' cl
   for (const range of ordered) {
     if (range.start < cursor) continue;
     html += escapeHtml(text.slice(cursor, range.start));
-    const tag = range.style === 'mark' ? 'mark' : 'strong';
+    const tag = range.style === 'mark' ? (markTag === 'span' ? 'span' : 'mark') : 'strong';
     const attrs = range.style === 'mark' ? markAttrs : strongAttrs;
     html += `<${tag}${attrs}>${escapeHtml(text.slice(range.start, range.end))}</${tag}>`;
     cursor = range.end;
@@ -1368,45 +1455,57 @@ function getCoverAsset(doc = {}) {
 
 function syncCoverCopyFromCore(doc) {
   const coreSummary = String(doc.meta?.visualPlan?.coreContent?.summary || doc.subtitle || '').trim();
-  const digest = fitWechatText(coreSummary, WECHAT_LIMITS.digestChars).value;
+  const summaryLocked = doc.meta?.subtitleLocked === true || doc.meta?.subtitleSource === 'human';
+  const legacyCoverLock = doc.meta?.coverCopyLocked === true && doc.meta?.coverMainLocked === undefined && doc.meta?.coverSubLocked === undefined;
+  const mainLocked = doc.meta?.coverMainLocked === true || legacyCoverLock;
+  const subLocked = doc.meta?.coverSubLocked === true || legacyCoverLock;
+  const digest = summaryLocked ? doc.subtitle : fitWechatText(coreSummary, WECHAT_LIMITS.digestChars).value;
   const coverAsset = getCoverAsset(doc);
-  const coverMain = fitWechatText(doc.title || coverAsset?.alt || '', WECHAT_LIMITS.titleImage.mainChars).value;
-  const coverSub = fitWechatText(digest, WECHAT_LIMITS.titleImage.subChars).value;
+  const coverMain = mainLocked ? coverAsset?.coverMain : fitWechatText(doc.title || coverAsset?.alt || '', WECHAT_LIMITS.titleImage.mainChars).value;
+  let coverSub = subLocked ? coverAsset?.coverSub : fitWechatText(digest, WECHAT_LIMITS.titleImage.subChars).value;
+  if (!subLocked && coverSub?.replace(/…$/, '').replace(/\s+/g, '') === fitWechatText(digest, WECHAT_LIMITS.titleImage.subChars).value.replace(/…$/, '').replace(/\s+/g, '')) {
+    const alternatives = [doc.meta?.visualPlan?.coreContent?.points?.[0], doc.title].filter(Boolean);
+    coverSub = alternatives.map(value => fitWechatText(`${value} · 核心观点`, WECHAT_LIMITS.titleImage.subChars).value)
+      .find(value => value.replace(/…$/, '').replace(/\s+/g, '') !== digest.replace(/\s+/g, '')) || fitWechatText(doc.title || '', WECHAT_LIMITS.titleImage.subChars).value;
+  }
 
-  doc.subtitle = digest;
+  if (!summaryLocked) doc.subtitle = digest;
   doc.meta = {
     ...(doc.meta || {}),
-    subtitleLocked: false,
-    subtitleSource: 'core',
-    coverCopyLocked: false,
-    coverCopySource: 'core'
+    ...(!summaryLocked ? { subtitleLocked: false, subtitleSource: 'core' } : {}),
+    coverMainLocked: mainLocked,
+    coverMainSource: mainLocked ? 'human' : 'core',
+    coverSubLocked: subLocked,
+    coverSubSource: subLocked ? 'human' : 'core',
+    coverCopyLocked: mainLocked && subLocked,
+    coverCopySource: mainLocked && subLocked ? 'human' : 'core'
   };
   if (!coverAsset) return doc;
 
   if (coverAsset.generated && coverAsset.source === 'draftloom:creative-local') {
     const refreshed = createCreativeAsset({
       id: coverAsset.id,
-      title: coverMain,
-      subtitle: coverSub,
+      title: coverMain || coverAsset.coverMain,
+      subtitle: coverSub || coverAsset.coverSub,
       keywords: doc.meta?.visualPlan?.keywords || [],
       theme: doc.theme,
       role: 'cover'
     });
     Object.assign(coverAsset, { ...refreshed, recognition: coverAsset.recognition });
+    if (mainLocked) coverAsset.coverMain = coverMain;
+    if (subLocked) coverAsset.coverSub = coverSub;
   } else {
-    coverAsset.coverMain = coverMain;
-    coverAsset.coverSub = coverSub;
+    if (!mainLocked) coverAsset.coverMain = coverMain;
+    if (!subLocked) coverAsset.coverSub = coverSub;
   }
   coverAsset.visualRole = 'cover';
   return doc;
 }
 
 function getCoverCopy(doc = {}, asset = null) {
-  const sub = String(asset?.coverSub || '').trim();
-  const summary = String(doc.subtitle || '').trim();
   return {
-    main: String(asset?.coverMain || doc.title || '').trim(),
-    sub: sub.replace(/\s+/g, '') === summary.replace(/\s+/g, '') ? '' : sub
+    main: String(asset?.coverMain || '').trim(),
+    sub: String(asset?.coverSub || '').trim()
   };
 }
 
@@ -1434,8 +1533,12 @@ export function renderDocumentBody(doc) {
   const coverBlock = getCoverBlock(doc);
   const coverAsset = getCoverAsset(doc);
   const coverCopy = getCoverCopy(doc, coverAsset);
+  const coverOverlaySvg = coverAsset && !coverAsset.generated ? renderCoverCopyOverlaySvg({ main: coverCopy.main, sub: coverCopy.sub }) : '';
+  const coverCopyOverlay = coverOverlaySvg
+    ? `<div class="wechat-cover-copy-overlay" aria-label="封面文案预览：${escapeHtml(coverCopy.main)} ${escapeHtml(coverCopy.sub)}"><img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(coverOverlaySvg)}" alt=""></div>`
+    : '';
   const coverMarkup = coverAsset?.dataUrl
-    ? `<figure class="wechat-cover${coverAsset.generated ? ' wechat-cover-generated' : ''}" data-wechat-cover="true"><img src="${escapeHtml(coverAsset.dataUrl)}" ${imageDataAttributes(coverAsset)} alt="${escapeHtml(coverAsset.alt || doc.title || '文章封面')}"><figcaption class="wechat-cover-copy"><strong>${escapeHtml(coverCopy.main)}</strong><span>${escapeHtml(coverCopy.sub)}</span></figcaption></figure>`
+    ? `<figure class="wechat-cover${coverAsset.generated ? ' wechat-cover-generated' : ''}" data-wechat-cover="true"><img src="${escapeHtml(coverAsset.dataUrl)}" ${imageDataAttributes(coverAsset)} alt="${escapeHtml(coverAsset.alt || doc.title || '文章封面')}">${coverCopyOverlay}</figure>`
     : `<div class="wechat-cover wechat-cover-placeholder" data-wechat-cover="true">封面图片位置 · 请从素材库插入或导入一张封面图</div>`;
   let imageSequence = 0;
   const renderBlock = block => {
@@ -1472,6 +1575,22 @@ export function renderDocumentBody(doc) {
   };
   const summary = `<p class="subtitle wechat-summary" data-wechat-summary="true"><span class="summary-label">内容摘要</span><span class="summary-text">${escapeHtml(doc.subtitle || '')}</span></p>`;
   return `${coverMarkup}<h1>${escapeHtml(doc.title)}</h1>${doc.author?.trim() ? `<div class="meta">${escapeHtml(doc.author)}</div>` : ''}${summary}${(doc.blocks || []).map(renderBlock).join('')}${renderArticleHashtags(doc)}`;
+}
+
+export function withCoverPreviewDraft(doc, {
+  summary,
+  mainManuallyEdited = false,
+  subManuallyEdited = false
+} = {}) {
+  return {
+    ...doc,
+    subtitle: summary ?? doc.subtitle,
+    meta: {
+      ...(doc.meta || {}),
+      ...(mainManuallyEdited ? { coverMainLocked: true, coverMainSource: 'human' } : {}),
+      ...(subManuallyEdited ? { coverSubLocked: true, coverSubSource: 'human' } : {})
+    }
+  };
 }
 
 export function renderArticleHtml(doc) {
@@ -1513,9 +1632,6 @@ export function renderArticleHtml(doc) {
     caption: `display:block;text-align:center;color:${mutedInk};font-size:12px;line-height:1.5;margin:8px 8px 0;overflow-wrap:anywhere;`,
     coverFigure: 'margin:-24px -20px 24px;text-align:center;',
     coverImage: 'width:100%;max-width:100%;height:auto;display:block;vertical-align:top;',
-    coverCopy: `padding:9px 12px;background:${softSurface};text-align:left;`,
-    coverMain: `display:block;font-size:16px;font-weight:700;line-height:1.4;color:${theme.ink};`,
-    coverSub: `display:block;margin-top:3px;font-size:12px;line-height:1.5;color:${mutedInk};`,
     summary: `margin:10px 0 24px;padding:11px 13px;background:${softSurface};border-left:3px solid ${theme.accent};border-radius:0 7px 7px 0;font-size:13px;line-height:1.7;color:${mutedInk};`,
     summaryLabel: `display:block;margin-bottom:3px;font-size:11px;font-weight:700;color:${theme.accent};`,
     list: 'width:100%;max-width:100%;padding-left:24px;font-size:16px;line-height:1.9;margin:16px 0;overflow-wrap:anywhere;',
@@ -1538,14 +1654,13 @@ export function renderArticleHtml(doc) {
   const assetById = id => assets.find(asset => asset.id === id);
   const coverBlock = getCoverBlock(doc);
   const coverAsset = getCoverAsset(doc);
-  const coverCopy = getCoverCopy(doc, coverAsset);
   const coverMarkup = coverAsset?.dataUrl
-    ? `<figure style="${styles.coverFigure}" data-wechat-cover="true"><img style="${styles.coverImage}" src="${escapeHtml(coverAsset.dataUrl)}" ${imageDataAttributes(coverAsset)} alt="${escapeHtml(coverAsset.alt || doc.title || '文章封面')}"><figcaption style="${styles.coverCopy}${coverAsset.generated ? 'display:none;' : ''}"><strong style="${styles.coverMain}">${escapeHtml(coverCopy.main)}</strong><span style="${styles.coverSub}">${escapeHtml(coverCopy.sub)}</span></figcaption></figure>`
+    ? `<figure style="${styles.coverFigure}" data-wechat-cover="true"><img style="${styles.coverImage}" src="${escapeHtml(coverAsset.dataUrl)}" ${imageDataAttributes(coverAsset)} alt="${escapeHtml(coverAsset.alt || doc.title || '文章封面')}"></figure>`
     : '';
   let imageSequence = 0;
   const renderInlineBlock = block => {
     if (coverBlock && block.id === coverBlock.id) return '';
-    const text = renderInlineEmphasis(block.text || '', block.emphasisRanges, { markAttrs: ` style="${styles.inlineMark}"`, strongAttrs: ` style="${styles.inlineStrong}"` });
+    const text = renderInlineEmphasis(block.text || '', block.emphasisRanges, { markAttrs: ` style="${styles.inlineMark}"`, strongAttrs: ` style="${styles.inlineStrong}"`, markTag: 'span' });
     if (block.type === 'heading') {
       const tag = Number(block.level) >= 3 ? 'h3' : 'h2';
       return `<${tag} style="${Number(block.level) >= 3 ? styles.subheading : styles.heading}">${text}</${tag}>`;

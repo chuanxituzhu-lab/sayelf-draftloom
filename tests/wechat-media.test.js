@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import sharp from 'sharp';
-import { normalizeWechatAsset, parseImageDataUrl } from '../scripts/wechat-media.mjs';
+import { normalizeWechatAsset, parseImageDataUrl, renderWechatCoverAsset } from '../scripts/wechat-media.mjs';
 import { plannedWechatImageType } from '../src/wechat-limits.js';
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="#2f7fe8"/></svg>';
@@ -51,6 +51,25 @@ test('leaves supported raster assets as raster assets', async () => {
   assert.equal(asset.name, 'cover.png');
   assert.equal(asset.size, 1);
   assert.equal(asset.convertedFrom, undefined);
+});
+
+test('renders cover copy locally into a non-destructive raster derivative', async () => {
+  const originalBytes = await sharp({ create: { width: 900, height: 383, channels: 3, background: '#d9ead3' } }).png().toBuffer();
+  const original = {
+    id: 'cover-local-copy', name: 'source-cover.png', type: 'image/png', width: 900, height: 383,
+    coverMain: '主文案测试', coverSub: '本地渲染副文案',
+    dataUrl: `data:image/png;base64,${originalBytes.toString('base64')}`
+  };
+  const rendered = await renderWechatCoverAsset(original);
+  assert.equal(rendered.renderedLocally, true);
+  assert.equal(rendered.type, 'image/png');
+  assert.equal(rendered.width, 900);
+  assert.equal(rendered.height, 383);
+  assert.equal(original.dataUrl, `data:image/png;base64,${originalBytes.toString('base64')}`);
+  const after = Buffer.from(rendered.dataUrl.split(',')[1], 'base64');
+  const beforePixel = await sharp(originalBytes).extract({ left: 30, top: 360, width: 1, height: 1 }).raw().toBuffer();
+  const lowerPixel = await sharp(after).extract({ left: 30, top: 360, width: 1, height: 1 }).raw().toBuffer();
+  assert.ok(lowerPixel[0] < beforePixel[0] || lowerPixel[1] < beforePixel[1]);
 });
 
 test('planned WeChat type matches actual WebP and GIF conversion; unsupported BMP is blocked', async () => {

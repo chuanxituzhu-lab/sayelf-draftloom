@@ -35,6 +35,8 @@ test('publishing stages keep their responsibilities separate', () => {
   assert.deepEqual(distilled.doc.blocks, bodyBeforeDistill);
   assert.equal(distilled.report.bodyRewritten, false);
   assert.ok(distilled.report.titleCandidates.length >= 1);
+  assert.ok(distilled.report.titleCandidates.every(item => item.evidence?.sentence));
+  assert.equal(Object.hasOwn(distilled.report.titleCandidates[0], 'score'), false);
 
   const laidOut = layoutArticleStage(distilled.doc, { generateImages: true, maxGenerated: 1 });
   assert.equal(getWorkflowState(laidOut.doc).stages.layout.status, 'complete');
@@ -162,6 +164,9 @@ test('WebUI binds both one-click 1-4 buttons without duplicate IDs', async () =>
   assert.match(appSource, /previousSubmission\?\.status === 'submitted'/);
   assert.match(appSource, /showSubmissionToast\(result\.delivery\)/);
   assert.match(appSource, /submitButton\.disabled=true/);
+  assert.match(appSource, /if \(!value\.authorized && !value\.remoteReady && value\.qrAuthorization\) authPollTimer=/);
+  assert.match(appSource, /if\(submitInFlight \|\| submitButton\?\.disabled\)return/);
+  assert.match(appSource, /微信接口未确认草稿创建，未能判定为提交成功/);
 });
 
 test('local asset library preserves existing entries and refuses silent FIFO eviction', async () => {

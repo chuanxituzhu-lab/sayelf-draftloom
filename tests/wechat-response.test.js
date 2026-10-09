@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyWechatDraftResponse } from '../src/wechat-response.js';
+import { describeWechatError, verifyWechatDraftResponse } from '../src/wechat-response.js';
+
+test('40164 diagnosis preserves WeChat original error including the egress IP', () => {
+  const message = describeWechatError({ errcode: 40164, errmsg: 'invalid ip 203.0.113.42 ipv6 :: not in whitelist rid: abc' });
+  assert.match(message, /203\.0\.113\.42/);
+  assert.match(message, /公网出口 IP 加入白名单/);
+});
+
+test('WeChat error display bounds the original message and retains friendly guidance', () => {
+  const message = describeWechatError({ errcode: 40164, errmsg: 'x'.repeat(900) });
+  assert.ok(message.length < 600);
+  assert.match(message, /公网出口 IP 加入白名单/);
+});
 
 test('only a successful WeChat response with a draft ID is reported as submitted', () => {
   assert.deepEqual(verifyWechatDraftResponse(true, { errcode: 0, media_id: 'draft-media-1' }), {

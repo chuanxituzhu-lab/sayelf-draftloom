@@ -1,4 +1,4 @@
-# Draftloom 公众号自动排版 v0.5.0
+# Draftloom 公众号自动排版 v0.5.1
 
 把 Markdown、TXT、DOCX、PDF 文章导入后，先在本机统一转换为 Markdown 中间稿，再按**识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交**工作流处理：完成本地识别、清理特殊符号、正文自然化、提炼核心、智能排版、生成封面、手机预览，最后导出微信 HTML 或提交到公众号草稿箱。DOCX 优先调用 Microsoft 开源 MarkItDown 本地转换，未安装时回退到 Mammoth + Turndown；原始输入信息和 Markdown 中间稿保留用于回退。WebUI 顶部使用本地植入的 SAYELF 山野精灵 Logo，浏览器标签页也复用同一图标；新增“微信官方深色”可选视觉系统：深色底、绿色结构锚点、局部重点和居中留边的图片卡片。WebUI 预留共享 GSAP Motion Layer，需要动效时直接调用，不新增 Skill，也不把动效逻辑散落到各功能模块。
 
@@ -50,12 +50,12 @@ $env:PORT="4177"; npm start
 
 ## 最新版本下载
 
-当前本地待发布版本：**v0.5.0**；发布后 GitHub 最新版本：**v0.5.0**
+当前本地版本：**v0.5.1**；GitHub 最新版本：**v0.5.1**
 
 - [打开 GitHub 仓库](https://github.com/chuanxituzhu-lab/sayelf-draftloom)
-- [下载最新 v0.5.0 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.5.0.zip)
-- [查看公众号排版 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.5.0/skill/SKILL.md)
-- [查看文章本地配图 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.5.0/skills/sayelf-article-visuals/SKILL.md)
+- [下载最新 v0.5.1 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.5.1.zip)
+- [查看公众号排版 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.5.1/skill/SKILL.md)
+- [查看文章本地配图 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.5.1/skills/sayelf-article-visuals/SKILL.md)
 
 源码 ZIP 已包含最新 Skill、WebUI、命令行工具和本地工作流；本地独立导出包仍保存在 `.local-data/exports/`，不上传到公开仓库。
 
@@ -67,8 +67,8 @@ $env:PORT="4177"; npm start
 - **自动识别文章**：支持 Markdown、TXT、DOCX、PDF；DOCX 优先由 Microsoft 开源 MarkItDown 转为 Markdown，未安装时回退到 Mammoth→Turndown，PDF/TXT 也统一进入 Markdown 中间稿。
 - **自动调用转换器**：按文件类型自动选择 DOCX→MarkItDown（不可用时 Mammoth→Turndown）、PDF→本地文本→Markdown、MD/TXT→规范化；无需再次点击转换，失败会明确停在识别阶段。
 - **自动清理格式**：只清除 Markdown 强调、代码、标题、引用和列表的展示标记；正文里的 `C#`、`A*`、`2*3` 和 `#话题` 等符号会保留。
-- **自动提炼核心**：生成 `CoreContent v1`，分开提取主题、问题、方法、结论、关键词和正文证据句，再生成标题候选、摘要和封面文案。
-- **自动排版指导**：一键生成章节层级、图片位置与内容、爆款标题、综合建议；每条建议都保留“带入指令”。
+- **自动提炼核心**：生成 `CoreContent v1`，分开提取主题、问题、方法、结论、关键词和正文证据句，再生成结论先行、附正文依据的标题候选、摘要和封面文案；不预测阅读量或承诺爆款。
+- **自动排版指导**：一键生成章节层级、图片位置与内容、标题建议和综合建议；每条建议都保留“带入指令”。
 - **自动匹配图片**：按文章长度、章节密度和图片语义安排正文配图，不会无上限塞图。
 - **自动生成封面**：头条封面统一转换为 PNG/JPEG，标准尺寸为 **900×383**，自动居中裁剪。
 - **手机效果预览**：右侧实时查看标题、摘要、正文、图片和封面在手机中的效果。
@@ -228,6 +228,14 @@ npm start
 - 正文默认调整为 15px、2.02 倍行距，降低正文对比度，保持长文阅读呼吸感。
 - 三级标题采用绿色视觉锚点，正文截图统一使用 88% 最大宽度的深色图片卡片，预览与微信导出 HTML 同步生效。
 - 更新 `skill/SKILL.md`、`SKILL.md` 与 `docs/visual-system.md`，记录参考边界、设计决策和可验证规则。
+
+## v0.5.1 更新内容
+
+- 标题建议改为核心结论先行，候选附带正文原句依据；依据不足不生成，不再输出虚构的“爆款分”或阅读量承诺。
+- 封面主/副文案在本机绘制并进入封面图；预览、HTML 导出、草稿包和提交复用同一成图，人工修改优先，原始素材不覆盖。
+- 修复提交等待期间页面无反馈/重复提交风险：异步执行发布、阻止重复请求，仅在微信确认有效草稿编号后显示成功。
+- 一键排版会在本章节范围内分隔连续配图；微信错误诊断保留原始提示，便于准确处理 IP 白名单等问题。
+- 本地服务已运行时不重复启动；显式本机配置齐备时跳过不必要的 DPAPI 解密调用。
 
 ## v0.5.0 更新内容
 

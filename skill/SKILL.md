@@ -3,7 +3,7 @@ name: wechat-layout
 description: Run a local-first Chinese WeChat Official Account publishing workflow with DOCX/PDF text extraction, special-marker cleanup, optional humanization, content distillation, deterministic layout, reference-derived visual systems, WeChat review, explicit draft submission, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、内容提炼、去 AI 味、发布审核、图片插入、视觉主题或本地预览。
 ---
 
-# 公众号排版 Skill — v0.4.9
+# 公众号排版 Skill — v0.5.1
 
 ## Purpose
 
@@ -15,12 +15,16 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 
 1. `recognizeArticleStage`：本地识别文字、Markdown、DOCX、PDF，清理展示标记并生成结构化区块；原稿只读保留。
 2. `humanizeArticleStage`（可选）：先生成正文差异预览；只有人工确认后才应用自然化新版本，不修改事实、数字、引用和核心观点。
-3. `distillArticleStage`：基于已接受的正文生成 `CoreContent v1`（主题、问题、方法、结论、关键词和关键证据句）、内容概要、标题候选和来源元数据；默认不改写正文，人工标题不会被覆盖。
+3. `distillArticleStage`：基于已接受的正文生成 `CoreContent v1`（主题、问题、方法、结论、关键词和关键证据句）、内容概要、结论先行的标题候选和来源元数据；每条标题附正文依据；默认不改写正文，人工标题不会被覆盖。
 4. `layoutArticleStage`：统一字体、字号、行距、段距和标题层级，拆分过长段落，局部标注重点，并按章节密度安排图片/封面。
 5. `reviewArticleStage`：只读检查标题、作者、摘要、正文字符/大小、封面、图片和 HTML；正文不会被审核静默改写，错误与建议都保留在报告中。
 6. `prepareWorkflowSubmission` + 现有提交适配器：生成微信 payload；只有用户显式确认且授权可用时，才上传图片并创建草稿，绝不代替后台群发。仅微信返回有效草稿编号后显示提交成功；GUI 提交中防重复点击，并在草稿面板与状态栏显示结果。
 
 `runPublishingWorkflow` 负责按依赖串联本地阶段并准备提交，不直接产生网络副作用。工作流状态写入 `doc.meta.workflow`：每个阶段都有 `status`、`at`、`report` 和 handoff；自然化预览会停在人工闸门，应用后自动让提炼、排版、审核和提交结果失效；阶段转换、检查点和证据写入本地 ledger，提交结果通过 `recordWorkflowSubmission` 写回。
+
+## Cover text rendering principle
+
+封面主/副文案优先调用现有本地 SVG、Canvas、Sharp 合成能力绘入图片，不把文章内容或原图发送到第三方渲染服务。人工编辑优先于自动建议；渲染生成派生图片，资源库原图保持不变。实时预览、HTML 导出、本地草稿包和公众号提交需复用同一渲染规格与成图；发布前核对文本、图片尺寸及结果状态。
 
 ## Local Markdown adapter
 
@@ -36,7 +40,7 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 
 `CoreContent` 是从已接受正文派生的本地推断对象，不是第二篇文章，也不替换正文。它固定包含 `thesis`、`topic`、`problem`、`method`、`conclusion`、`keywords` 和 `keySentences`，并标记 `epistemic: inference`、`localOnly: true`。`keySentences` 保留正文原句、`TOPIC/PROBLEM/METHOD/CONCLUSION` 类型和原文位置；正文未明确表达的问题、方法或结论保持 `null`，不靠猜测补齐。
 
-标题和摘要另存 `titleSource`、`digestSource`、`contentSource`、`bodyRewritten`、`requiresReview`、`localOnly` 元数据。交给排版前必须通过 `validateCoreContent`；未来 AI Harness 只能在显式授权且传输边界清楚时接入，并必须返回同一 schema、经过本机校验和人工复核。普通界面展示字段摘要，证据句折叠展示，不把原始 JSON 混入文章正文。
+标题和摘要另存 `titleSource`、`digestSource`、`contentSource`、`bodyRewritten`、`requiresReview`、`localOnly` 元数据。标题优先取 CoreContent 的结论/主张，结论先行、简洁，并以正文已有观点或方法形成钩子；每条候选展示对应正文句作为依据。不足以支撑标题时不生成；不输出未校准的“爆款分”，不承诺阅读量或爆款结果。交给排版前必须通过 `validateCoreContent`；未来 AI Harness 只能在显式授权且传输边界清楚时接入，并必须返回同一 schema、经过本机校验和人工复核。普通界面展示字段摘要，证据句折叠展示，不把原始 JSON 混入文章正文。
 
 ## State rule
 
@@ -61,13 +65,13 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 - `addImage({name,type,dataUrl,alt})`：新图片进入素材库。
 - `replaceSelectedImage(assetId)`：用素材库图片替换当前选中的图片区块。
 - `deleteImage(assetId)`：从素材库删除素材，并同步移除文章/画廊中的对应图片引用；支持 undo/redo。
-- `importArticle({text,filename,assets})`：导入 Markdown 中间稿与本地图片，自动清理 `*`、`#`、反引号等展示标记、总结正文、生成爆款标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。GUI 的 DOCX/PDF 识别通过本机 `/api/extract-document` 完成：DOCX 优先走 Microsoft MarkItDown，未安装时回退 Mammoth→Turndown；PDF/TXT 走本地 Markdown 规范化，原文件名和原始稿件信息保留用于回滚。
+- `importArticle({text,filename,assets})`：导入 Markdown 中间稿与本地图片，自动清理 `*`、`#`、反引号等展示标记、总结正文、生成结论先行且附正文依据的标题候选、建立章节/段落/引用和图片块；浏览器导入还会把图片写入跨文章本地素材库。GUI 的 DOCX/PDF 识别通过本机 `/api/extract-document` 完成：DOCX 优先走 Microsoft MarkItDown，未安装时回退 Mammoth→Turndown；PDF/TXT 走本地 Markdown 规范化，原文件名和原始稿件信息保留用于回滚。
 - `publishingWorkflow()`：在当前文档上运行识别、可选自然化、核心提炼、自动排版和公众号审核本地阶段，并显示提交是否已准备好；WebUI 的“一键执行1-4”绑定到同一函数，不自动联网。
 - `humanizePreview(mode)` / `humanizeApply()` / `humanizeSkip()`：生成去 AI 味正文预览，人工确认应用或保留原文跳过；应用后自动要求重新提炼、排版和审核。
 - GUI 提供“清空重传”和“文章记录”：换稿前自动保存当前稿件，最近 12 篇文章结构保存在浏览器本机；记录可重新打开或删除，图片引用复用本地素材库。
 - 导入或编辑时，普通段落保持原样；重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号只在对应文字范围内加粗或加浅色标记，状态可随文章版本一起回滚。
 - `generateTitleImage`：本地提炼文章核心内容，生成一张 900×383 标题图片并写入素材库，标题和摘要仍可人工修改。
-- `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})`：先按正文篇幅与章节密度计算正文配图预算，再识别图片文件名、描述以及可选的 OCR/视觉标签，将素材/本地创意图插入分布均匀的章节；`fillUnmatched:true` 也遵守预算，不会把剩余素材库图片无上限追加。每个匹配图片区块会记录置信度、命中关键词、内容标签和识别来源，生成结果可人工替换、移动或删除。`forceTitle:true` 仅用于用户主动点击“生成爆款标题”，人工编辑过的标题默认锁定。
+- `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})`：先按正文篇幅与章节密度计算正文配图预算，再识别图片文件名、描述以及可选的 OCR/视觉标签，将素材/本地创意图插入分布均匀的章节；`fillUnmatched:true` 也遵守预算，不会把剩余素材库图片无上限追加。每个匹配图片区块会记录置信度、命中关键词、内容标签和识别来源，生成结果可人工替换、移动或删除。`forceTitle:true` 仅用于用户主动点击“生成标题建议”（旧命令“生成爆款标题”仍兼容），人工编辑过的标题默认锁定。
 - 新增的 `$sayelf-article-visuals` 复用此 JS/SVG 章节配图器；可选“RAL 风格配色”（仅为近似视觉风格，不冒称官方 RAL 色号），本地 FFmpeg 脚本可将 SVG 生成 4 秒 MP4。视频输出目前是独立本地文件，不自动写入公众号正文媒体块。
 - 科技热点仅从 IT之家、量子位、极客公园国内媒体公开订阅检索；不访问海外站点、不发送文章。历史非国内来源证据自动失效；至少两个独立来源才显示多源关注，该指标不代表公众号热榜。
 - 图片入库后若已有正文，会自动在本机匹配封面与章节位置；匹配依据限于文件名、替代文字及已有描述、标签或 OCR，不调用云端视觉识别。没有足够语义证据的图片保留在素材库，不插入文章末尾；匹配后须检查预览，可撤销、移动或替换。

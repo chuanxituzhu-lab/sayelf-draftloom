@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COVER_SPEC, draftCoverCopy, renderCoverSvg, auditCoverImage } from '../src/cover.js';
+import { COVER_SPEC, draftCoverCopy, renderCoverSvg, renderCoverCopyOverlaySvg, auditCoverImage } from '../src/cover.js';
 
 test('SVG headline cover is 900x383 and centers text', () => {
   const svg = renderCoverSvg({ main: '测试封面', sub: '副文案', kind: 'headline' });
@@ -12,6 +12,14 @@ test('SVG headline cover is 900x383 and centers text', () => {
 test('SVG square cover is 383x383', () => {
   const svg = renderCoverSvg({ main: '方图', kind: 'square' });
   assert.match(svg, /width="383" height="383"/);
+});
+
+test('local cover-copy overlay escapes text and uses the requested image dimensions', () => {
+  const svg = renderCoverCopyOverlaySvg({ main: '<本地标题>', sub: '副文案 & 要点', width: 900, height: 383 });
+  assert.match(svg, /width="900" height="383"/);
+  assert.match(svg, /&lt;本地标题&gt;/);
+  assert.match(svg, /副文案 &amp; 要点/);
+  assert.equal(renderCoverCopyOverlaySvg({ main: '', sub: '' }), '');
 });
 
 test('draftCoverCopy clips main copy to <=10 chars and flags checks', () => {
