@@ -68,6 +68,8 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 - 导入或编辑时，普通段落保持原样；重点词、金句、标题、核心句及“第 N”“一～N/一-N”编号只在对应文字范围内加粗或加浅色标记，状态可随文章版本一起回滚。
 - `generateTitleImage`：本地提炼文章核心内容，生成一张 900×383 标题图片并写入素材库，标题和摘要仍可人工修改。
 - `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})`：先按正文篇幅与章节密度计算正文配图预算，再识别图片文件名、描述以及可选的 OCR/视觉标签，将素材/本地创意图插入分布均匀的章节；`fillUnmatched:true` 也遵守预算，不会把剩余素材库图片无上限追加。每个匹配图片区块会记录置信度、命中关键词、内容标签和识别来源，生成结果可人工替换、移动或删除。`forceTitle:true` 仅用于用户主动点击“生成爆款标题”，人工编辑过的标题默认锁定。
+- 新增的 `$sayelf-article-visuals` 复用此 JS/SVG 章节配图器；可选“RAL 风格配色”（仅为近似视觉风格，不冒称官方 RAL 色号），本地 FFmpeg 脚本可将 SVG 生成 4 秒 MP4。视频输出目前是独立本地文件，不自动写入公众号正文媒体块。
+- 科技热点仅从 IT之家、量子位、极客公园国内媒体公开订阅检索；不访问海外站点、不发送文章。历史非国内来源证据自动失效；至少两个独立来源才显示多源关注，该指标不代表公众号热榜。
 - 图片入库后若已有正文，会自动在本机匹配封面与章节位置；匹配依据限于文件名、替代文字及已有描述、标签或 OCR，不调用云端视觉识别。没有足够语义证据的图片保留在素材库，不插入文章末尾；匹配后须检查预览，可撤销、移动或替换。
 - `coverSet()`：根据封面与内容摘要设置区，优先复用素材库中的合规封面，置为文章首图，并依据核心提炼结果同步摘要、封面主文案和副文案；若没有合规封面才生成一个可替换候选，不重复导入已有素材。`smartCover()` 作为内部兼容别名保留。
 - 扫码授权：配置真实 `WECHAT_QR_AUTH_URL` 后由本机自动渲染附带一次性 `draftloom_state` 的二维码，适配器回调时必须原样返回该状态；单独使用 `WECHAT_QR_IMAGE_URL` 时，本机必须配置 `WECHAT_QR_CALLBACK_SECRET`，回调提交 `callback_secret`。Windows 将回调 Token 用当前用户 DPAPI 加密保存在 `.local-data`。

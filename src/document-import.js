@@ -127,7 +127,11 @@ export function detectArticleEmphasis(value = '', options = {}) {
 
 export function applyArticleEmphasis(document = {}) {
   const next = structuredClone(document);
+  next.title = sanitizeArticleText(next.title);
+  next.author = sanitizeArticleText(next.author);
+  next.subtitle = sanitizeArticleText(next.subtitle);
   next.blocks = Array.isArray(next.blocks) ? next.blocks.map(block => {
+    block = sanitizeBlock(block);
     if (!['paragraph', 'heading'].includes(block?.type)) return block;
     const detected = detectArticleEmphasis(block.text, { type: block.type });
     if (detected) return { ...block, emphasis: detected.style, emphasisLabel: detected.label, emphasisRanges: detected.ranges, emphasisSource: 'auto' };
@@ -160,6 +164,8 @@ export function sanitizeArticleText(value = '') {
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/\*{3}([^*\n]+)\*{3}/g, '$1')
     .replace(/\*{2}([^*\n]+)\*{2}/g, '$1')
+    // Truncated summaries and split blocks can leave unmatched bold delimiters.
+    .replace(/\*{2,}/g, '')
     .replace(/(^|[\s([{（])\*([^*\n]+)\*(?=$|[\s)\]}），。！？；;:：])/gm, '$1$2')
     .replace(/__([^_\n]+)__/g, '$1')
     .replace(/~~([^~\n]+)~~/g, '$1')

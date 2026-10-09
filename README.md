@@ -1,4 +1,4 @@
-# Draftloom 公众号自动排版 v0.4.9
+# Draftloom 公众号自动排版 v0.5.0
 
 把 Markdown、TXT、DOCX、PDF 文章导入后，先在本机统一转换为 Markdown 中间稿，再按**识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交**工作流处理：完成本地识别、清理特殊符号、正文自然化、提炼核心、智能排版、生成封面、手机预览，最后导出微信 HTML 或提交到公众号草稿箱。DOCX 优先调用 Microsoft 开源 MarkItDown 本地转换，未安装时回退到 Mammoth + Turndown；原始输入信息和 Markdown 中间稿保留用于回退。WebUI 顶部使用本地植入的 SAYELF 山野精灵 Logo，浏览器标签页也复用同一图标；新增“微信官方深色”可选视觉系统：深色底、绿色结构锚点、局部重点和居中留边的图片卡片。WebUI 预留共享 GSAP Motion Layer，需要动效时直接调用，不新增 Skill，也不把动效逻辑散落到各功能模块。
 
@@ -50,15 +50,19 @@ $env:PORT="4177"; npm start
 
 ## 最新版本下载
 
-当前本地工作版本：**v0.4.9**；GitHub 最新公开版本：**v0.4.9**
+当前本地待发布版本：**v0.5.0**；发布后 GitHub 最新版本：**v0.5.0**
 
 - [打开 GitHub 仓库](https://github.com/chuanxituzhu-lab/sayelf-draftloom)
-- [下载最新 v0.4.9 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.4.9.zip)
-- [查看最新 v0.4.9 Skill 使用说明](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.4.9/skill/SKILL.md)
+- [下载最新 v0.5.0 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.5.0.zip)
+- [查看公众号排版 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.5.0/skill/SKILL.md)
+- [查看文章本地配图 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.5.0/skills/sayelf-article-visuals/SKILL.md)
 
 源码 ZIP 已包含最新 Skill、WebUI、命令行工具和本地工作流；本地独立导出包仍保存在 `.local-data/exports/`，不上传到公开仓库。
 
 ## 客户能直接得到什么
+
+- **国内科技热词搜索核实**：关键词面板只读取 IT之家、量子位、极客公园的公开订阅，不访问海外站点、不发送文章正文。近 7 天至少两个独立来源、不同标题才标记“近期多源关注”；记录来源、链接、发布日期与检索时间，证据 24 小时后需更新。该信号不等于公众号热榜排名；网络失败、来源不足、转载重复或过期证据均不标为已核实。正文明确提及的科技词才规范为 `#ChatGPT`、`#Codex`、`#ClaudeCode`、`#WorkBuddy` 并显示在文章末尾。
+- **本地语义配图**：智能配图使用 JavaScript 本地生成 SVG，自动按文章语义将封面和章节插图放到匹配段落；可选“RAL 风格配色”。该风格不代表官方 RAL 色号，只有用户本机提供有授权的 RAL 色值文件时才可引用官方色值。文章和素材不发送到外部图像服务。
 
 - **自动识别文章**：支持 Markdown、TXT、DOCX、PDF；DOCX 优先由 Microsoft 开源 MarkItDown 转为 Markdown，未安装时回退到 Mammoth→Turndown，PDF/TXT 也统一进入 Markdown 中间稿。
 - **自动调用转换器**：按文件类型自动选择 DOCX→MarkItDown（不可用时 Mammoth→Turndown）、PDF→本地文本→Markdown、MD/TXT→规范化；无需再次点击转换，失败会明确停在识别阶段。
@@ -224,6 +228,12 @@ npm start
 - 正文默认调整为 15px、2.02 倍行距，降低正文对比度，保持长文阅读呼吸感。
 - 三级标题采用绿色视觉锚点，正文截图统一使用 88% 最大宽度的深色图片卡片，预览与微信导出 HTML 同步生效。
 - 更新 `skill/SKILL.md`、`SKILL.md` 与 `docs/visual-system.md`，记录参考边界、设计决策和可验证规则。
+
+## v0.5.0 更新内容
+
+- 科技热词搜索仅连接 IT之家、量子位、极客公园国内公开订阅，旧海外来源证据作废，并要求至少两个独立来源才显示多源关注。
+- 新增本地文章视觉 Skill：复用 Draftloom 的 JavaScript/SVG 章节插图与封面生成，提供 RAL 风格配色；本地 FFmpeg 可从 SVG 输出短 MP4。
+- 文字稿面板允许直接粘贴后分析创作建议；统一清理摘要、标题等遗留 Markdown 强调符号，并避免重复摘要/默认作者日期。
 
 ## v0.4.9 更新内容
 

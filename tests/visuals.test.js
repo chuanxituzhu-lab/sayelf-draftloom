@@ -103,7 +103,7 @@ test('hot topic fit stays evidence-bound and distinguishes direct from weak matc
     text: 'AI 可以降低内容制作成本，但作者仍需保留自己的判断和执行。',
     hotTopics: '#AI\n#旅游消费'
   });
-  assert.equal(direct.verified, true);
+  assert.equal(direct.verified, false);
   assert.equal(direct.level, 'strong');
   assert.ok(direct.matchedTopics.includes('AI'));
   assert.match(direct.note, /正文/);

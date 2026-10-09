@@ -104,6 +104,8 @@ npm start   # 浏览器打开 http://127.0.0.1:4173
 - 标题/摘要使用独立元数据记录 `titleSource`、`digestSource`、`contentSource`、`bodyRewritten`、`requiresReview` 和 `localOnly`；提炼只读当前已接受正文，不把 CoreContent 当第二篇文章，不静默改写正文。
 - CoreContent 交给排版前必须通过 `validateCoreContent`；失败时停在本地提炼边界，不把不完整结果交给下游。未来 AI Harness 只能作为显式、可替换适配器，必须返回相同 schema，仍需本机校验和人工复核。
 - `autoComposeVisuals({generate,autoImageCount,maxGenerated,titleMode,forceTitle,fillUnmatched})` 会按正文篇幅与章节密度自动计算正文配图预算，再依据本地文件名、替代文字及已有描述/标签/OCR 语义匹配素材到封面和章节位置；低置信图片留在素材库，不硬塞到正文末尾。上传素材时若已有正文会自动执行匹配，用户可检查预览并撤销、移动或替换；不调用云端视觉识别。
+- 本地生成插图时可选“RAL 风格配色”，沿用 JavaScript SVG 渲染并按文章语义自动插入匹配章节；这不是官方 RAL 色值或色号。需要独立文章视觉工作流时调用 `$sayelf-article-visuals`，短视频可由其本地 FFmpeg 脚本从 SVG 生成 MP4；视频不会伪装为已嵌入可发布的微信正文。
+- 科技热词检索仅访问 IT之家、量子位、极客公园的公开订阅，不访问海外站点、不发送文章；近 7 天至少两个独立国内媒体来源才标记多源关注，且不等同于公众号热榜。历史版本的海外来源证据自动失效。
 - `autoFormatDocument(doc)` 是本地确定性排版核心：统一安全字体栈、字号、行距、段距和标题层级；将过长段落按句子边界拆分；仅保留识别到的重点、金句和编号局部标注。选择“微信官方深色”时，正文默认 15px/2.02 倍行距，二级标题使用绿色锚线，三级标题使用绿色文字，正文图片使用 88% 最大宽度的深色图片卡片。规则不会改写原稿语义，Document State 经过 VersionStore 后支持回滚。
 - `runPublishingWorkflow(input, options)` 是工作流编排核心：`recognizeArticleStage` 只识别并结构化，`humanizeArticleStage` 是可选的“预览→人工确认→应用”正文节点，`distillArticleStage` 生成 CoreContent v1/标题/概要/关键词及校验元数据，`layoutArticleStage` 负责排版与图片位置，`reviewArticleStage` 只读检查微信规则且不改正文，`prepareWorkflowSubmission` 只准备草稿 payload。每阶段报告写入 `meta.workflow`，阶段契约、检查点和本地证据记录在同一文档状态中，上游重跑会把下游标记为 `stale`。
 - 工作流默认在本机执行，去 AI 味预览不修改正文，应用后通过 VersionStore 产生新版本并要求下游重新验收；提炼不静默改写正文，审核保留错误与人工建议；`submit` 只是显式确认后的最后动作，远程授权和上传仍隔离在现有提交适配器中。

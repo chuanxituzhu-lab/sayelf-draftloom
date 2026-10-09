@@ -5,6 +5,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyProtectedLocalConfig } from './scripts/local-config.mjs';
+import { searchTechTopics } from './scripts/tech-topic-search.mjs';
 import { extractLocalDocument, MAX_DOCUMENT_BYTES } from './scripts/document-extract.mjs';
 import { normalizeQrAuthUrl, qrDataUrlForAuthUrl } from './src/qr-auth.js';
 import { readProtectedAuth, saveProtectedAuth } from './scripts/local-auth.mjs';
@@ -172,6 +173,7 @@ const server = http.createServer(async (req, res) => {
   try {
     assertLocalRequest(req);
     const raw = decodeURIComponent((req.url || '/').split('?')[0]);
+    if (raw === '/api/tech-topics/search' && req.method === 'POST') return json(res, 200, await searchTechTopics());
     if (raw === '/api/wechat/status' && req.method === 'GET') return json(res, 200, await wechatStatus());
     if (raw === '/api/wechat/auth/callback' && req.method === 'GET') {
       return json(res, 200, {

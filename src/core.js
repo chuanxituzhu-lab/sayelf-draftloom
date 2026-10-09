@@ -1023,6 +1023,9 @@ export function reduceDocument(doc, intent, selectedId = null) {
   let changed = true;
 
   switch (intent.type) {
+    case 'setTopicEvidence':
+      next.meta = { ...(next.meta || {}), techTopicEvidence: clone(intent.evidence) };
+      break;
     case 'noop': return { doc, selectedId, changed: false };
     case 'setTitle':
       next.title = intent.text;
@@ -1058,7 +1061,8 @@ export function reduceDocument(doc, intent, selectedId = null) {
         fillUnmatched: intent.fillUnmatched === true,
         autoImageCount: intent.autoImageCount === true,
         maxBodyImages: Number.isFinite(Number(intent.maxBodyImages)) ? Number(intent.maxBodyImages) : undefined,
-        coreThemeCount: Number.isFinite(Number(intent.coreThemeCount)) ? Number(intent.coreThemeCount) : 0
+        coreThemeCount: Number.isFinite(Number(intent.coreThemeCount)) ? Number(intent.coreThemeCount) : 0,
+        colorPalette: intent.colorPalette === 'ral-inspired' ? 'ral-inspired' : 'default'
       });
       return { doc: composed, selectedId: composed.blocks[0]?.id || selectedId, changed: true };
     }
@@ -1398,9 +1402,11 @@ function syncCoverCopyFromCore(doc) {
 }
 
 function getCoverCopy(doc = {}, asset = null) {
+  const sub = String(asset?.coverSub || '').trim();
+  const summary = String(doc.subtitle || '').trim();
   return {
     main: String(asset?.coverMain || doc.title || '').trim(),
-    sub: String(asset?.coverSub || doc.subtitle || '').trim()
+    sub: sub.replace(/\s+/g, '') === summary.replace(/\s+/g, '') ? '' : sub
   };
 }
 
@@ -1413,7 +1419,7 @@ function articleKeywordSource(doc = {}) {
 }
 
 function renderArticleHashtags(doc = {}, styles = null) {
-  const hashtags = generateArticleKeywords({ title: doc.title || '', text: articleKeywordSource(doc), max: 8 }).hashtags;
+  const hashtags = generateArticleKeywords({ title: doc.title || '', text: articleKeywordSource(doc), topicEvidence: doc.meta?.techTopicEvidence, max: 8 }).hashtags;
   if (!hashtags.length) return '';
   const tags = hashtags.map(tag => styles?.tag
     ? `<span style="${styles.tag}">${escapeHtml(tag)}</span>`
@@ -1465,7 +1471,7 @@ export function renderDocumentBody(doc) {
     return `<p>${text}</p>`;
   };
   const summary = `<p class="subtitle wechat-summary" data-wechat-summary="true"><span class="summary-label">内容摘要</span><span class="summary-text">${escapeHtml(doc.subtitle || '')}</span></p>`;
-  return `${coverMarkup}<h1>${escapeHtml(doc.title)}</h1><div class="meta">${escapeHtml(doc.author || '公众号排版')} · ${doc.meta?.updatedAt ? new Date(doc.meta.updatedAt).toLocaleDateString() : ''}</div>${summary}${(doc.blocks || []).map(renderBlock).join('')}${renderArticleHashtags(doc)}`;
+  return `${coverMarkup}<h1>${escapeHtml(doc.title)}</h1>${doc.author?.trim() ? `<div class="meta">${escapeHtml(doc.author)}</div>` : ''}${summary}${(doc.blocks || []).map(renderBlock).join('')}${renderArticleHashtags(doc)}`;
 }
 
 export function renderArticleHtml(doc) {
@@ -1569,7 +1575,7 @@ export function renderArticleHtml(doc) {
     }
     return `<p style="${styles.paragraph}">${text}</p>`;
   };
-  const body = `${coverMarkup}<h1 style="${styles.title}">${escapeHtml(doc.title)}</h1><div style="${styles.meta}">${escapeHtml(doc.author || '公众号排版')} · ${doc.meta?.updatedAt ? new Date(doc.meta.updatedAt).toLocaleDateString() : ''}</div><p style="${styles.summary}" data-wechat-summary="true"><span style="${styles.summaryLabel}">内容摘要</span><span>${escapeHtml(doc.subtitle || '')}</span></p>${(doc.blocks || []).map(renderInlineBlock).join('')}${renderArticleHashtags(doc, { container: styles.hashtags, list: '', tag: styles.hashtag })}`;
+  const body = `${coverMarkup}<h1 style="${styles.title}">${escapeHtml(doc.title)}</h1>${doc.author?.trim() ? `<div style="${styles.meta}">${escapeHtml(doc.author)}</div>` : ''}<p style="${styles.summary}" data-wechat-summary="true"><span style="${styles.summaryLabel}">内容摘要</span><span>${escapeHtml(doc.subtitle || '')}</span></p>${(doc.blocks || []).map(renderInlineBlock).join('')}${renderArticleHashtags(doc, { container: styles.hashtags, list: '', tag: styles.hashtag })}`;
   return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(doc.title)}</title><article class="wechat-article" style="${styles.article}">${body}</article>`;
 }
 

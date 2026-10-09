@@ -1,3 +1,4 @@
+import { TECH_TOPICS, topicMentioned, verifiedTopics } from './tech-topics.js';
 // Local-first visual planning for WeChat articles.
 //
 // The planner deliberately has no network dependency. It produces a stable
@@ -29,7 +30,8 @@ const CORE_TYPE_TERMS = Object.freeze({
 const PALETTES = Object.freeze({
   minimal: { bg: '#eef6f2', ink: '#153b2e', accent: '#1f9d72', soft: '#a9dfc7' },
   editorial: { bg: '#f7eee5', ink: '#4c3022', accent: '#a8683e', soft: '#e2baa0' },
-  fresh: { bg: '#eaf8f8', ink: '#174650', accent: '#218a9b', soft: '#a9dfe2' }
+  fresh: { bg: '#eaf8f8', ink: '#174650', accent: '#218a9b', soft: '#a9dfe2' },
+  ralInspired: { bg: '#edf2e8', ink: '#26362a', accent: '#567d46', soft: '#c4d3ad' }
 });
 
 function clone(value) { return structuredClone(value); }
@@ -149,18 +151,23 @@ function normalizeHashtag(value = '') {
  * Builds customer-facing article keywords and copy-ready hashtags locally.
  * The result is a recommendation, not a claim about the article's facts.
  */
-export function generateArticleKeywords({ title = '', text = '', existingKeywords = [], max = 8 } = {}) {
+export function generateArticleKeywords({ title = '', text = '', existingKeywords = [], topicEvidence = null, max = 8 } = {}) {
   const source = `${title}\n${text}`;
+  const mentioned = TECH_TOPICS.filter(topic => topicMentioned(source, topic)).map(topic => topic.keyword);
+  const corroborated = new Set(verifiedTopics(topicEvidence).map(topic => topic.keyword));
   const extracted = extractKeywords(source, Math.max(12, Number(max) * 2 || 16));
   const provided = Array.isArray(existingKeywords) ? existingKeywords : [];
   const titleTerms = String(title).match(/[\u4e00-\u9fff]{2,12}|[a-z][a-z0-9-]{2,}/gi) || [];
   const shortEnglishTerms = source.match(/\b[A-Z]{2,}\b/g) || [];
-  const candidates = [...titleTerms, ...shortEnglishTerms, ...provided, ...extracted]
+  const candidates = [...mentioned, ...titleTerms, ...shortEnglishTerms, ...provided, ...extracted]
     .map(normalizeHashtag)
-    .filter(Boolean);
+    .filter(Boolean).map(term => mentioned.find(name => name.toLowerCase() === term.toLowerCase()) || term);
   const sourceLower = source.toLowerCase();
   const keywords = [...new Set(candidates)]
     .sort((a, b) => {
+      const aTech = mentioned.includes(a) ? (corroborated.has(a) ? 2 : 1) : 0;
+      const bTech = mentioned.includes(b) ? (corroborated.has(b) ? 2 : 1) : 0;
+      if (aTech !== bTech) return bTech - aTech;
       const aHits = sourceLower.split(a.toLowerCase()).length - 1;
       const bHits = sourceLower.split(b.toLowerCase()).length - 1;
       return bHits - aHits || b.length - a.length || a.localeCompare(b);
@@ -202,10 +209,11 @@ function parseHotTopics(value) {
  * hot-topic list. Without that list it deliberately reports an unverified
  * local semantic hint instead of pretending to know a live hot search.
  */
-export function evaluateHotTopicFit({ title = '', text = '', keywords = [], hotTopics = [], max = 8 } = {}) {
-  const plan = generateArticleKeywords({ title, text, existingKeywords: keywords, max });
+export function evaluateHotTopicFit({ title = '', text = '', keywords = [], hotTopics = [], topicEvidence = null, max = 8 } = {}) {
+  const verified = verifiedTopics(topicEvidence);
+  const plan = generateArticleKeywords({ title, text, existingKeywords: keywords, topicEvidence, max });
   const source = `${title}\n${text}`;
-  const topics = parseHotTopics(hotTopics);
+  const topics = parseHotTopics([...parseHotTopics(hotTopics), ...verified.map(topic => topic.keyword)]);
   const articleRules = HOT_TOPIC_RULES.filter(rule => rule.terms.some(term => hasTopicTerm(source, term)));
   const directHotTopics = topics.filter(topic => hasTopicTerm(source, topic));
   const assessments = plan.keywords.map(keyword => {
@@ -216,7 +224,7 @@ export function evaluateHotTopicFit({ title = '', text = '', keywords = [], hotT
     });
     const keywordRules = HOT_TOPIC_RULES.filter(rule => rule.terms.some(term => hasTopicTerm(keyword, term)));
     const relatedTopics = topics.filter(topic => keywordRules.some(rule => rule.terms.some(term => hasTopicTerm(topic, term))));
-    if (!topics.length) return { keyword, relation: 'unknown', label: '待核验', advice: '尚未提供实时热词，先按文章主题保留。', relatedTopics: [] };
+    if (!topics.length) return { keyword, relation: 'unknown', label: '待核验', advice: '尚无通过多源核实的热词，先按文章主题保留。', relatedTopics: [] };
     if (exactTopics.length) return { keyword, relation: 'strong', label: '强关联', advice: '可以合理借势，但正文要有对应事实或观点。', relatedTopics: exactTopics };
     if (relatedTopics.length) return { keyword, relation: 'adjacent', label: '可借势', advice: '有主题交集，建议从文章自身观点切入，不要硬塞热词。', relatedTopics };
     return { keyword, relation: 'weak', label: '不建议', advice: '正文缺少直接支撑，不建议为了热点强行添加。', relatedTopics: [] };
@@ -242,10 +250,15 @@ export function evaluateHotTopicFit({ title = '', text = '', keywords = [], hotT
     decision = '不建议硬蹭';
     note = '当前文章关键词与输入热词缺少直接支撑，不建议为了流量强行添加。';
   }
+  if (topicEvidence?.checkedAt && !verified.length) {
+    decision = '检索完成 · 证据不足或需更新';
+    note = '当前检索证据不足或已过期，尚无通过多源核实的科技热词。保留文章自身关键词，可查看下方来源或重新检索。';
+  }
   return {
     ...plan,
     hotTopics: topics,
-    verified: topics.length > 0,
+    verified: verified.length > 0,
+    verificationLabel: verified.length ? '近期新闻多源关注 · 非公众号热榜' : '未核实热度（手工输入也需核实）',
     level,
     decision,
     score: topics.length ? Math.min(100, strongCount * 25 + adjacentCount * 12) : null,
@@ -655,8 +668,8 @@ export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = tr
 function paletteFor(theme = 'minimal') { return PALETTES[theme] || PALETTES.minimal; }
 function svgDataUrl(svg) { return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`; }
 
-export function renderCreativeSvg({ title = '', subtitle = '', keywords = [], theme = 'minimal', role = 'section', index = 0 } = {}) {
-  const palette = paletteFor(theme);
+export function renderCreativeSvg({ title = '', subtitle = '', keywords = [], theme = 'minimal', colorPalette = 'default', role = 'section', index = 0 } = {}) {
+  const palette = colorPalette === 'ral-inspired' ? PALETTES.ralInspired : paletteFor(theme);
   const main = escapeXml(truncate(title || '一段值得分享的真实体验', role === 'cover' ? WECHAT_LIMITS.titleImage.mainChars : 22));
   const sub = escapeXml(truncate(subtitle || keywords.slice(0, 3).join(' · '), role === 'cover' ? WECHAT_LIMITS.titleImage.subChars : 30));
   const chips = keywords.slice(0, 3).map((keyword, chipIndex) => `<text x="${56 + chipIndex * 142}" y="326" font-size="16" fill="${palette.ink}" opacity=".72">${escapeXml(truncate(keyword, 8))}</text>`).join('');
@@ -670,9 +683,9 @@ export function renderCreativeSvg({ title = '', subtitle = '', keywords = [], th
   </svg>`;
 }
 
-export function createCreativeAsset({ title, subtitle, keywords = [], theme = 'minimal', role = 'section', index = 0, anchorId = null, id = null } = {}) {
+export function createCreativeAsset({ title, subtitle, keywords = [], theme = 'minimal', colorPalette = 'default', role = 'section', index = 0, anchorId = null, id = null } = {}) {
   const safeTitle = clean(title) || '未命名主题';
-  const svg = renderCreativeSvg({ title: safeTitle, subtitle, keywords, theme, role, index });
+  const svg = renderCreativeSvg({ title: safeTitle, subtitle, keywords, theme, colorPalette, role, index });
   const dataUrl = svgDataUrl(svg);
   return {
     id: id || randomId(),
@@ -687,6 +700,7 @@ export function createCreativeAsset({ title, subtitle, keywords = [], theme = 'm
     source: 'draftloom:creative-local',
     generated: true,
     theme,
+    colorPalette,
     visualRole: role,
     visualAnchor: anchorId,
     prompt: `根据文章${role === 'cover' ? '主题' : role === 'theme' ? '核心内容' : '章节主题'}“${safeTitle}”生成${role === 'cover' ? '标题封面' : role === 'theme' ? '主题图' : '章节场景'}；关键词：${keywords.join('、')}`,
@@ -702,7 +716,7 @@ function insertAfterAnchor(blocks, anchorId, block) {
 }
 
 /** Applies the plan and returns a new document, suitable for a reducer intent. */
-export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false, useCoreForCover = false, forceCoreSummary = false, autoImageCount = false, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages, coreThemeCount = 0 } = {}) {
+export function autoComposeDocument(input = {}, { generate = true, maxGenerated = 3, includeCover = true, titleMode = 'safe', forceTitle = false, titleProfile = {}, fillUnmatched = false, useCoreForCover = false, forceCoreSummary = false, autoImageCount = false, maxBodyImages = IMAGE_BUDGET_DEFAULTS.maxBodyImages, coreThemeCount = 0, colorPalette = 'default' } = {}) {
   const next = clone(input);
   const source = articleSource(next);
   const coreContent = extractCoreContent({ text: source, title: next.title, max: 96, maxPoints: 3 });
@@ -730,7 +744,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
   const addOrUpdateGenerated = ({ role, anchorId = null, index = 0, brief = '', subtitle = '', purpose = null, coreSummary = '', themeIndex = null }) => {
     const keywords = extractKeywords(`${next.title}\n${brief}\n${source}`, 6);
     const existing = findGenerated(role, anchorId, purpose, themeIndex);
-    const asset = createCreativeAsset({ id: existing?.id, title: role === 'cover' ? next.title : (brief || next.title), subtitle: role === 'cover' ? (subtitle || next.subtitle) : (subtitle || (role === 'theme' ? '根据文章核心内容生成' : '文章语义场景图')), keywords, theme: next.theme, role, index, anchorId });
+    const asset = createCreativeAsset({ id: existing?.id, title: role === 'cover' ? next.title : (brief || next.title), subtitle: role === 'cover' ? (subtitle || next.subtitle) : (subtitle || (role === 'theme' ? '根据文章核心内容生成' : '文章语义场景图')), keywords, theme: next.theme, colorPalette, role, index, anchorId });
     if (purpose) Object.assign(asset, { visualPurpose: purpose, coreSummary: clean(coreSummary), themeIndex });
     const position = next.assets.findIndex(item => item.id === asset.id);
     if (position >= 0) next.assets[position] = asset;

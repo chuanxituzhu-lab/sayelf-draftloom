@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { getArticleFileKind, sanitizeArticleText, sanitizeImportedDocument } from '../src/document-import.js';
 import { importArticle, renderArticleHtml } from '../src/core.js';
-import { detectArticleEmphasis } from '../src/document-import.js';
+import { detectArticleEmphasis, applyArticleEmphasis } from '../src/document-import.js';
 import { documentKind, extractLocalDocument, htmlToMarkdown, normalizeMarkdown, textToMarkdown } from '../scripts/document-extract.mjs';
 import { MAX_ARTICLE_HISTORY, createArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from '../src/article-history.js';
 
@@ -55,6 +55,19 @@ test('local document conversion produces a Markdown intermediate without network
   assert.match(markdown, /1\. 先准备素材/);
   assert.equal(normalizeMarkdown('  一段文字。\r\n\r\n\r\n'), '一段文字。');
   assert.equal(textToMarkdown('纯文本\r\n\r\n第二段'), '纯文本\n\n第二段');
+});
+
+test('unmatched bold markers are removed from summaries and split blocks, with original source preserved', () => {
+  const original = '**AI 工具越来越多，真正解决问题的却未必越来越多。\n**使用 AI**：把 AI 用于工作。';
+  const doc = applyArticleEmphasis({ title: '**标题', subtitle: '**AI 工具越来越多', original: { text: original }, blocks: [
+    { id: 'a', type: 'paragraph', text: '**AI 工具越来越多。' },
+    { id: 'b', type: 'paragraph', text: '使用 AI**：把 AI 用于工作。' }
+  ] });
+  assert.equal(doc.title, '标题');
+  assert.equal(doc.subtitle, 'AI 工具越来越多');
+  assert.deepEqual(doc.blocks.map(block => block.text), ['AI 工具越来越多。', '使用 AI：把 AI 用于工作。']);
+  assert.equal(doc.original.text, original);
+  assert.equal(sanitizeArticleText('**跨行\n强调**；A*，2*3，C#，#话题'), '跨行\n强调；A*，2*3，C#，#话题');
 });
 
 test('DOCX extraction keeps Word list structure in the Markdown handoff', async () => {

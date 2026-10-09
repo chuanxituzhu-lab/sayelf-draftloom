@@ -5,6 +5,7 @@ import { APP_VERSION } from './version.js';
 import { applyArticleEmphasis, getArticleFileKind, isSupportedArticleFile, normalizeArticleMarkdown } from './document-import.js';
 import { MAX_ARTICLE_HISTORY, removeArticleHistoryEntry, restoreArticleHistoryEntry, upsertArticleHistory } from './article-history.js';
 import { evaluateHotTopicFit } from './visuals.js';
+import { isDomesticTopicSource, verifiedTopics } from './tech-topics.js';
 import { getWorkflowState, humanizeArticleStage, recordWorkflowSubmission, runPublishingWorkflow, skipHumanizeArticleStage } from './workflow.js';
 import { createMotionLayer } from './motion.js';
 
@@ -22,6 +23,7 @@ let store = new VersionStore(doc);
 let status = '就绪';
 let submissionToastDismissed = false;
 let libraryTab = 'mine';
+let scriptDraft = null;
 let assetQuery = '';
 let assetSort = 'recent';
 let assetFilter = 'all';
@@ -224,7 +226,7 @@ function renderLibraryPane() {
   const tabs = [['mine', '我的素材'], ['resource', '资源库'], ['script', '文字稿']].map(([id, label]) => `<button class="library-tab ${libraryTab === id ? 'active' : ''}" data-library-tab="${id}">${label}</button>`).join('');
   if (libraryTab === 'script') {
     const source = doc.original?.text || doc.blocks.filter(block => block.type !== 'image').map(block => block.text || '').join('\n\n');
-    return `<div class="library-header"><div class="library-tabs">${tabs}</div><div class="script-tools"><span>原稿文字（只读保护）</span><button data-copy-script>复制</button></div></div><textarea class="script-view" readonly>${esc(source)}</textarea>`;
+    return `<div class="library-header"><div class="library-tabs">${tabs}</div><div class="script-tools"><span>文字稿（可直接粘贴编辑）</span><button data-copy-script>复制原稿</button></div></div><textarea id="scriptInput" class="script-view" aria-label="文字稿输入" placeholder="在这里粘贴文章，然后点击下方按钮">${esc(scriptDraft ?? source)}</textarea><button data-analyze-script class="primary-button">分析并生成创作建议</button>`;
   }
   const query = assetQuery.trim().toLowerCase();
   let assets = doc.assets.filter(asset => (!query || `${asset.name} ${asset.alt || ''}`.toLowerCase().includes(query)) && (assetFilter !== 'unused' || !assetInUse(asset.id)));
@@ -294,7 +296,7 @@ function currentKeywordSource() {
 }
 
 function renderKeywordPanel() {
-  const assessment = evaluateHotTopicFit({ title: doc.title, text: currentKeywordSource(), hotTopics: hotTopicsText, max: 8 });
+  const assessment = evaluateHotTopicFit({ title: doc.title, text: currentKeywordSource(), hotTopics: hotTopicsText, topicEvidence: doc.meta?.techTopicEvidence, max: 8 });
   const plan = assessment;
   if (!plan.keywords.length) return '<section class="keyword-panel"><div class="keyword-empty">导入文章后，将自动匹配关键词并生成 #标签。</div></section>';
   const chips = plan.hashtags.map(tag => `<span class="keyword-chip">${esc(tag)}</span>`).join('');
@@ -575,7 +577,7 @@ function render() {
     <header class="topbar">
       <div class="brand-lockup"><img class="app-logo-mark" src="/assets/sayelf-logo.png" alt="SAYELF 山野精灵" width="34" height="34"><span class="brand-copy"><strong>公众号排版</strong><small>Draftloom · SAYELF</small></span><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
-        <button id="visualComposeBtn" title="按文章篇幅与章节密度自动匹配图片数量，再生成标题图和章节配图">智能配图与标题</button><button id="assetAutoFillBtn" title="使用本地文件名、替代文字和已有图片描述匹配封面及相关章节；低置信素材不会硬插入">匹配素材到文章</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
+        <select id="visualPalette" aria-label="配图色彩方案" title="本地插图色彩方案；RAL 风格并非官方 RAL 色值"><option value="default">默认配色</option><option value="ral-inspired">RAL 风格配色</option></select><button id="visualComposeBtn" title="本地生成封面和章节插图，按文章语义自动插入相应段落">智能配图与标题</button><button id="assetAutoFillBtn" title="使用本地文件名、替代文字和已有图片描述匹配封面及相关章节；低置信素材不会硬插入">匹配素材到文章</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
       </div>
     </header>
@@ -914,6 +916,10 @@ function bindLibraryEvents() {
   const clearUnused = document.querySelector('[data-clear-unused]');
   if (clearUnused) clearUnused.onclick = () => commit({type:'deleteUnusedAssets'}, '清理未使用素材');
   const copyScript = document.querySelector('[data-copy-script]');
+  const scriptInput = document.querySelector('#scriptInput');
+  if (scriptInput) scriptInput.oninput = event => { scriptDraft = event.target.value; };
+  const analyzeScript = document.querySelector('[data-analyze-script]');
+  if (analyzeScript) analyzeScript.onclick = () => { scriptDraft = scriptInput.value; document.querySelector('#growthAnalyze')?.click(); };
   if (copyScript) copyScript.onclick = async () => { const source = doc.original?.text || ''; try { await navigator.clipboard.writeText(source); setStatus('文字稿已复制'); } catch { setStatus('复制失败，请手动选择文字稿'); } };
 }
 function clearCoverDragState() {
@@ -1009,6 +1015,32 @@ function bindEvents() {
     catch { setStatus('复制失败，请手动选择关键词'); }
   };
   const hotTopicsInput = document.querySelector('#hotTopicsInput');
+  const hotFit = document.querySelector('.hot-fit');
+  if (hotFit) {
+    const evidence = doc.meta?.techTopicEvidence;
+    const activeTopics = new Set(verifiedTopics(evidence).map(topic => topic.keyword));
+    const techPanel = document.createElement('div');
+    const evidenceIsDomestic = evidence?.provider === 'domestic-tech-media-rss';
+    const rows = (evidence?.topics || []).map(topic => {
+      const links = (evidenceIsDomestic ? topic.sources || [] : []).filter(isDomesticTopicSource).map(source => `<a href="${esc(/^https:\/\//.test(source.url || '') ? source.url : '#')}" target="_blank" rel="noopener noreferrer">${esc(source.publisher || source.publisherDomain)} · ${esc(source.publishedAt)}</a>`).join('<br>');
+      return `<li><b>#${esc(topic.keyword)}</b> · ${activeTopics.has(topic.keyword) ? '近期多源关注' : topic.status === 'corroborated' ? '证据已过期，请更新' : '证据不足'}<br>${links}</li>`;
+    }).join('');
+    techPanel.innerHTML = `<button id="verifyTechTopics" type="button">搜索并交叉核实科技热词</button><p>仅读取 IT之家、量子位、极客公园等国内科技媒体公开订阅，不访问海外站点，也不发送文章。近 7 天至少两个独立来源才标记多源关注；新闻报道关注度不等于公众号热榜。正文提及的工具才加入文章末尾标签。</p>${evidence ? `<small>${evidenceIsDomestic ? `上次检索：${esc(evidence.checkedAt)} · 证据 24 小时后需更新` : '历史检索证据来自旧来源，已作废；请重新搜索国内媒体源'}</small><ul>${rows}</ul>${evidenceIsDomestic ? `<p>${esc((evidence.errors || []).join('；'))}</p>` : ''}` : ''}`;
+    hotFit.append(techPanel);
+    document.querySelector('#verifyTechTopics').onclick = async event => {
+      event.target.disabled = true;
+      event.target.textContent = '正在搜索与交叉核实…';
+      try {
+        const response = await fetch('/api/tech-topics/search', { method: 'POST', signal: AbortSignal.timeout(20000) });
+        if (!response.ok) throw new Error(`检索服务返回 ${response.status}，请重启本地服务后重试`);
+        const result = await response.json();
+        if (!Array.isArray(result.topics) || !result.checkedAt) throw new Error('检索结果不完整');
+        commit({ type: 'setTopicEvidence', evidence: result }, '记录科技热词检索证据');
+        setStatus(result.errors?.length ? `部分搜索不可用：${result.errors.join('；')}，未把失败标为已核实` : '科技词检索完成，证据已保存；相关标签已同步到文章末尾');
+      } catch (error) { setStatus(`科技热词检索失败：${error.message}`); }
+      finally { const button = document.querySelector('#verifyTechTopics'); if (button) { button.disabled = false; button.textContent = '搜索并交叉核实科技热词'; } }
+    };
+  }
   if (hotTopicsInput) hotTopicsInput.onchange = event => {
     hotTopicsText = event.target.value.trim();
     saveHotTopics();
@@ -1026,7 +1058,7 @@ function bindEvents() {
   document.querySelector('#redoBtn').onclick=()=>{doc=store.redo(doc);persist();render();setStatus('已重做一步');};
   document.querySelector('#zoomOut').onclick=()=>setZoom(zoom-.1); document.querySelector('#zoomIn').onclick=()=>setZoom(zoom+.1); document.querySelector('#zoomReset').onclick=()=>setZoom(1);
   document.querySelector('#draftBtn').onclick=openDraftDialog;
-  document.querySelector('#visualComposeBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral'},'智能配图与标题');
+  document.querySelector('#visualComposeBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral',colorPalette:document.querySelector('#visualPalette')?.value||'default'},'智能配图与标题');
   document.querySelector('#coverAutoBtn').onclick=()=>commit({type:'smartCover'},'封面一键设置');
   const titleImageButton = document.querySelector('#titleImageAutoBtn');
   if (titleImageButton && !document.querySelector('#coreThemeImagesBtn')) {
@@ -1094,7 +1126,9 @@ function bindEvents() {
    bindCoverDragEvents();
    bindArticleHistoryEvents();
   const growthAnalyzeButton = document.querySelector('#growthAnalyze');
-  if (growthAnalyzeButton) growthAnalyzeButton.onclick = () => {
+  if (growthAnalyzeButton) growthAnalyzeButton.onclick = async () => {
+    if (scriptDraft !== null && !scriptDraft.trim()) { setStatus('请先在文字稿中粘贴文章内容'); return; }
+    growthAnalyzeButton.disabled = true;
     growthProfile = normalizeGrowthProfile({
       accountName: document.querySelector('#growthAccount')?.value,
       positioning: document.querySelector('#growthPositioning')?.value,
@@ -1104,6 +1138,11 @@ function bindEvents() {
       cta: document.querySelector('#growthCta')?.value
     });
     saveGrowthProfile();
+    if (scriptDraft !== null && scriptDraft !== (doc.original?.text || '')) {
+      const imported = await handleArticleImport([], scriptDraft);
+      if (!imported) { document.querySelector('#growthAnalyze')?.removeAttribute('disabled'); return; }
+    }
+    scriptDraft = null;
     growthReport = analyzeGrowth(doc, growthProfile);
     render();
     setStatus(`创作画像分析：${growthReport.viral.score} 分，${growthReport.compliance.decision}`);
@@ -1282,8 +1321,10 @@ async function handleArticleImport(fileList=[], pastedText=''){
       const converterLabel=extracted.converter==='microsoft-markitdown'?'（Microsoft MarkItDown）':extracted.converter==='mammoth-turndown'?'（Mammoth→Turndown）':extracted.converter==='pdf-parse-markdown'?'（本地 PDF→Markdown）':'';
       const capacityNote=skippedImageCount?`，${skippedImageCount} 张图片因素材库容量已满未入库（原素材未覆盖）`:'';
       setStatus(warnings.length?`已完成 ${sourceLabel}${converterLabel} 发布工作流并导入，${warnings.length} 条提示${capacityNote}`:`已完成 ${sourceLabel}${converterLabel} 发布工作流${reused?`，复用素材 ${reused} 张`:''}${generated?`，新增创意图 ${generated} 张`:''}${capacityNote}`);
+      return true;
     }
-  } catch(err) { setStatus(`导入失败：${err.message}`); }
+    return false;
+  } catch(err) { setStatus(`导入失败：${err.message}`); return false; }
 }
 window.wechatLayoutHarness = {  getState: () => structuredClone(doc),
   applyIntent: (intent, label='Harness 编辑') => commit(intent, label),
