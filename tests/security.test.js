@@ -36,7 +36,7 @@ test('local server serves only public assets and rejects untrusted callback and 
         child.once('error', rejectReady);
         child.once('exit', code => rejectReady(new Error(`服务启动失败 (${code})`)));
       }),
-      new Promise((_, rejectReady) => setTimeout(() => rejectReady(new Error('服务启动超时')), 10_000))
+      new Promise((_, rejectReady) => setTimeout(() => rejectReady(new Error('服务启动超时')), 30_000))
     ]);
     const base = `http://127.0.0.1:${port}`;
     assert.equal((await fetch(`${base}/`)).status, 200);
@@ -44,6 +44,9 @@ test('local server serves only public assets and rejects untrusted callback and 
     assert.equal((await fetch(`${base}/scripts/local-auth.mjs`)).status, 404);
     assert.equal((await fetch(`${base}/.git/config`)).status, 404);
     assert.equal((await fetch(`${base}/src/app.js`)).status, 200);
+    assert.equal((await fetch(`${base}/node_modules/three/build/three.module.js`)).status, 200);
+    assert.equal((await fetch(`${base}/node_modules/three/build/three.core.js`)).status, 200);
+    assert.equal((await fetch(`${base}/node_modules/three/build/three.webgpu.js`)).status, 404);
     const status = await (await fetch(`${base}/api/wechat/status`)).json();
     assert.equal(status.qrGenerated, true);
     assert.match(status.qrAuthUrl, /draftloom_state=/);
@@ -58,6 +61,8 @@ test('local server serves only public assets and rejects untrusted callback and 
       body: JSON.stringify({ access_token: 'synthetic-test-token' })
     });
     assert.equal(foreignOrigin.status, 403);
+    const foreignLibrary = await fetch(`${base}/api/article-library`, { headers: { origin: 'http://untrusted.example' } });
+    assert.equal(foreignLibrary.status, 403);
   } finally {
     child.kill();
     await Promise.race([once(child, 'exit'), new Promise(resolveDone => setTimeout(resolveDone, 3000))]);

@@ -12,6 +12,7 @@ import { readProtectedAuth } from './local-auth.mjs';
 import { normalizeWechatAsset, parseImageDataUrl, renderWechatCoverAsset } from './wechat-media.mjs';
 import { extractLocalDocument } from './document-extract.mjs';
 import { describeWechatError, verifyWechatDraftResponse } from '../src/wechat-response.js';
+import { resolveWechatAccessToken as resolveSharedWechatAccessToken } from './wechat-api.mjs';
 import { distillArticleStage, getWorkflowState, humanizeArticleStage, layoutArticleStage, recordWorkflowSubmission, reviewArticleStage, runPublishingWorkflow, skipHumanizeArticleStage } from '../src/workflow.js';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -220,17 +221,7 @@ async function fetchWechat(url, options = {}, label = '微信接口请求') {
   }
 }
 async function resolveWechatAccessToken() {
-  if (process.env.WECHAT_ACCESS_TOKEN || process.env.WX_ACCESS_TOKEN) return process.env.WECHAT_ACCESS_TOKEN || process.env.WX_ACCESS_TOKEN;
-  const saved = readPersistedAuth();
-  if (saved) return saved.access_token;
-  const appId = process.env.WECHAT_APP_ID || process.env.WX_APPID;
-  const appSecret = process.env.WECHAT_APP_SECRET || process.env.WX_APPSECRET;
-  if (!appId || !appSecret) return null;
-  const url = `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(appSecret)}`;
-  const response = await fetchWechat(url, {}, '获取微信 access_token');
-  const body = await response.json();
-  if (!response.ok || !body.access_token) throw new Error(`获取微信 access_token 失败：${describeWechatError(body) || response.status}`);
-  return body.access_token;
+  return resolveSharedWechatAccessToken({ root: projectRoot, env: process.env, fetchImpl: (...args) => fetchWechat(...args, '获取微信 access_token') });
 }
 function wechatDraftStatus() {
   const persisted = Boolean(readPersistedAuth());

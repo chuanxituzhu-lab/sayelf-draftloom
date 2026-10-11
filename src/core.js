@@ -4,6 +4,13 @@ import { applyArticleEmphasis, sanitizeImportedDocument } from './document-impor
 import { renderCoverCopyOverlaySvg } from './cover.js';
 
 export const MAX_HISTORY = 50;
+export const TITLE_FONT_SIZES = Object.freeze([20, 22, 24, 26, 28, 30, 32]);
+export const DEFAULT_TITLE_FONT_SIZE = 26;
+
+export function normalizeTitleFontSize(value) {
+  const numeric = Number(value);
+  return TITLE_FONT_SIZES.includes(numeric) ? numeric : DEFAULT_TITLE_FONT_SIZE;
+}
 
 export const THEMES = Object.freeze({
   minimal: { id: 'minimal', label: '极简', accent: '#07c160', surface: '#f5f7f8', ink: '#303a43', heading: 'system-ui,"PingFang SC","Microsoft YaHei",sans-serif' },
@@ -108,6 +115,7 @@ export function getWechatLayoutProfile(doc = {}) {
     quoteGap: clampLayoutNumber(stored.quoteGap, 16, 30, themeLayout.quoteGap ?? WECHAT_LAYOUT_PROFILE.quoteGap),
     paragraphAlign: stored.paragraphAlign === 'justify' ? 'justify' : 'left',
     titleAlign: stored.titleAlign === 'left' || stored.titleAlign === 'right' ? stored.titleAlign : (theme.titleAlign || 'center'),
+    titleFontSize: normalizeTitleFontSize(doc.meta?.titleFontSize),
     imageMaxWidth: clampLayoutNumber(stored.imageMaxWidth, 70, 100, theme.imageMaxWidth || 100),
     imageRadius: clampLayoutNumber(stored.imageRadius, 0, 16, theme.imageRadius ?? 8)
   };
@@ -125,6 +133,7 @@ export function getWechatLayoutVariables(doc = {}) {
     `--wechat-quote-gap:${profile.quoteGap}px`,
     `--wechat-paragraph-align:${profile.paragraphAlign}`,
     `--wechat-title-align:${profile.titleAlign}`,
+    `--wechat-title-size:${profile.titleFontSize}px`,
     `--wechat-image-max:${profile.imageMaxWidth}%`,
     `--wechat-image-radius:${profile.imageRadius}px`
   ].join(';') + ';';
@@ -262,6 +271,8 @@ export function autoFormatDocument(doc = {}) {
         delete part.emphasisLabel;
         delete part.emphasisRanges;
         delete part.emphasisSource;
+        delete part.emphasisFallback;
+        delete part.emphasisItemIndex;
       }
       formattedBlocks.push(part);
     });
@@ -1088,6 +1099,13 @@ export function reduceDocument(doc, intent, selectedId = null) {
       next.title = intent.text;
       next.meta = { ...(next.meta || {}), titleLocked: true, titleSource: 'human' };
       break;
+    case 'setTitleFontSize': {
+      if (!TITLE_FONT_SIZES.includes(Number(intent.fontSize))) return { doc, selectedId, changed: false };
+      const fontSize = normalizeTitleFontSize(intent.fontSize);
+      if (fontSize === getWechatLayoutProfile(doc).titleFontSize) return { doc, selectedId, changed: false };
+      next.meta = { ...(next.meta || {}), titleFontSize: fontSize };
+      break;
+    }
     case 'setAuthor': next.author = intent.text; break;
     case 'setSubtitle':
       next.subtitle = intent.text;
@@ -1226,6 +1244,24 @@ export function reduceDocument(doc, intent, selectedId = null) {
     case 'addAsset': {
       if (next.assets.some(a => a.id === intent.asset.id)) return { doc, selectedId, changed: false };
       next.assets.push(intent.asset); break;
+    }
+    case 'insertGeneratedAsset': {
+      const asset = intent.asset;
+      if (!asset?.id || !String(asset.dataUrl || '').startsWith('data:image/png;base64,')) return { doc, selectedId, changed: false, error: '本地主题图必须是 PNG 图片' };
+      if (next.assets.some(item => item.id === asset.id)) return { doc, selectedId, changed: false };
+      if (next.assets.length >= 200) return { doc, selectedId, changed: false, error: '素材库已达 200 张上限，请先手动删除不需要的素材' };
+      next.assets.push(clone(asset));
+      let anchorIndex = next.blocks.findIndex(block => block.id === (intent.afterId || selectedId));
+      if (anchorIndex >= 0 && next.blocks[anchorIndex].visualRole === 'cover') anchorIndex = -1;
+      if (anchorIndex < 0) anchorIndex = next.blocks.findIndex(block => block.type === 'heading' || block.type === 'paragraph');
+      if (anchorIndex < 0) anchorIndex = next.blocks.length - 1;
+      const block = {
+        id: crypto.randomUUID(), type: 'image', assetId: asset.id,
+        text: String(asset.alt || '本地三维主题插图'), source: 'draftloom:three-local', generatedBy: 'three-local'
+      };
+      next.blocks.splice(Math.max(0, anchorIndex + 1), 0, block);
+      selected = block.id;
+      break;
     }
     case 'setCoverAsset': {
       const asset = next.assets.find(item => item.id === intent.assetId);
@@ -1509,6 +1545,64 @@ function getCoverCopy(doc = {}, asset = null) {
   };
 }
 
+function normalizeArticleEcho(value = '') {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/^(?:原来|其实|没想到|说到底)(?:[，,：:、\s]*)/u, '')
+    .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function shortTextOverlap(shortText, longText) {
+  if (shortText.length < 12 || longText.length < shortText.length) return 0;
+  const grams = value => new Set(Array.from({ length: Math.max(0, value.length - 1) }, (_, index) => value.slice(index, index + 2)));
+  const shortGrams = grams(shortText);
+  if (!shortGrams.size) return 0;
+  const longGrams = grams(longText);
+  let shared = 0;
+  for (const gram of shortGrams) if (longGrams.has(gram)) shared += 1;
+  return shared / shortGrams.size;
+}
+
+function getRedundantIntroBlockIds(doc = {}) {
+  const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
+  const openingTextBlocks = blocks
+    .map((block, index) => ({ block, index }))
+    .filter(({ block }) => block && block.type !== 'image')
+    .slice(0, 3);
+  const title = normalizeArticleEcho(doc.title);
+  if (title.length < 8) return new Set();
+
+  const repeatedTitle = openingTextBlocks.find(({ block }) => {
+    if (block.type !== 'heading') return false;
+    const candidate = normalizeArticleEcho(block.text);
+    return candidate.length >= 8 && (candidate === title
+      || (Math.min(candidate.length, title.length) / Math.max(candidate.length, title.length) >= 0.82
+        && shortTextOverlap(candidate.length < title.length ? candidate : title, candidate.length < title.length ? title : candidate) >= 0.88));
+  });
+  if (!repeatedTitle) return new Set();
+
+  const redundantIds = new Set([repeatedTitle.block.id]);
+  const summary = normalizeArticleEcho(doc.subtitle);
+  if (summary.length < 16) return redundantIds;
+
+  let considered = 0;
+  for (const block of blocks.slice(repeatedTitle.index + 1)) {
+    if (!block || block.type === 'image') continue;
+    if (block.type === 'heading') break;
+    considered += 1;
+    if (considered > 3) break;
+    if (block.type !== 'paragraph') continue;
+    const candidate = normalizeArticleEcho(block.text);
+    if (candidate.length < 16 || candidate.length > 70) continue;
+    if (shortTextOverlap(candidate, summary) >= 0.55) {
+      redundantIds.add(block.id);
+      break;
+    }
+  }
+  return redundantIds;
+}
+
 function articleKeywordSource(doc = {}) {
   const blocks = (doc.blocks || [])
     .filter(block => block.type !== 'image')
@@ -1528,8 +1622,10 @@ function renderArticleHashtags(doc = {}, styles = null) {
 }
 
 export function renderDocumentBody(doc) {
+  doc = applyArticleEmphasis(doc);
   const assets = doc.assets || [];
   const assetById = id => assets.find(asset => asset.id === id);
+  const redundantIntroBlockIds = getRedundantIntroBlockIds(doc);
   const coverBlock = getCoverBlock(doc);
   const coverAsset = getCoverAsset(doc);
   const coverCopy = getCoverCopy(doc, coverAsset);
@@ -1542,6 +1638,7 @@ export function renderDocumentBody(doc) {
     : `<div class="wechat-cover wechat-cover-placeholder" data-wechat-cover="true">封面图片位置 · 请从素材库插入或导入一张封面图</div>`;
   let imageSequence = 0;
   const renderBlock = block => {
+    if (redundantIntroBlockIds.has(block.id)) return '';
     if (coverBlock && block.id === coverBlock.id) return '';
     const text = renderInlineEmphasis(block.text || '', block.emphasisRanges);
     if (block.type === 'heading') {
@@ -1550,7 +1647,10 @@ export function renderDocumentBody(doc) {
     }
     if (block.type === 'quote') return `<blockquote>${text}</blockquote>`;
     if (block.type === 'list') {
-      const items = (block.items || String(block.text || '').split('\n')).filter(Boolean).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+      const items = (block.items || String(block.text || '').split('\n')).filter(Boolean).map((item, index) => {
+        const ranges = block.emphasisItemIndex === index ? block.emphasisRanges : [];
+        return `<li>${renderInlineEmphasis(item, ranges)}</li>`;
+      }).join('');
       return block.ordered ? `<ol>${items}</ol>` : `<ul>${items}</ul>`;
     }
     if (block.type === 'table') {
@@ -1594,6 +1694,15 @@ export function withCoverPreviewDraft(doc, {
 }
 
 export function renderArticleHtml(doc) {
+  doc = applyArticleEmphasis(doc);
+  const standard = renderWechatArticleHtml(doc, false);
+  // Keep the usual inline spacing on ordinary articles, but shed repeated
+  // presentation bytes before a paragraph-heavy draft approaches WeChat's
+  // hard content ceiling. Leave headroom for media URLs assigned after upload.
+  return charCount(standard) > 18_000 ? renderWechatArticleHtml(doc, true) : standard;
+}
+
+function renderWechatArticleHtml(doc, compact = false) {
   const theme = THEMES[normalizeTheme(doc.theme)];
   const layout = getWechatLayoutProfile(doc);
   const articleBackground = theme.articleBackground || (theme.surface === '#f5f7f8' ? '#fff' : theme.surface);
@@ -1609,32 +1718,37 @@ export function renderArticleHtml(doc) {
     ? `border-left:0;border-bottom:1px solid ${themeLine};padding:0 0 7px;`
     : `padding-left:10px;border-left:3px solid ${theme.accent};`;
   const styles = {
-    article: `width:100%;max-width:677px;box-sizing:border-box;margin:0 auto;padding:24px 20px 32px;background:${articleBackground};color:${bodyInk};font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};word-break:break-word;overflow-wrap:anywhere;`,
-    title: `font-family:${layout.headingFontFamily};font-size:26px;line-height:1.4;letter-spacing:.02em;margin:0 0 10px;text-align:${layout.titleAlign};color:${theme.ink};`,
+    article: `width:100%;max-width:677px;box-sizing:border-box;margin:0 auto;padding:24px 20px 32px;background:${articleBackground};color:${bodyInk};font-family:${layout.bodyFontFamily};font-size:${layout.bodyFontSize}px;line-height:${layout.bodyLineHeight};text-align:${layout.paragraphAlign};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;`,
+    title: `font-family:${layout.headingFontFamily};font-size:${layout.titleFontSize}px;line-height:1.4;letter-spacing:.02em;margin:0 0 10px;text-align:${layout.titleAlign};color:${theme.ink};`,
     subtitle: `color:${mutedInk};margin:0 0 6px;text-align:${layout.titleAlign};line-height:1.7;`,
     meta: `font-size:12px;color:${mutedInk};margin-bottom:26px;text-align:${layout.titleAlign};line-height:1.5;`,
-    heading: `font-family:${layout.headingFontFamily};font-size:20px;line-height:1.5;margin:${layout.headingGap}px 0 13px;color:${theme.ink};${headingDecoration}`,
-    subheading: `font-family:${layout.headingFontFamily};font-size:18px;line-height:1.5;margin:24px 0 11px;color:${theme.dark ? theme.accent : theme.ink};${subheadingDecoration}`,
+    heading: `font-family:${layout.headingFontFamily};font-size:20px;line-height:1.5;margin:${layout.headingGap}px 0 13px;text-align:left;color:${theme.ink};${headingDecoration}`,
+    subheading: `font-family:${layout.headingFontFamily};font-size:18px;line-height:1.5;margin:24px 0 11px;text-align:left;color:${theme.dark ? theme.accent : theme.ink};${subheadingDecoration}`,
     // Inheritable typography and wrapping live on the article root. Keep each
     // paragraph's inline style lean: WeChat counts the submitted HTML string,
     // so repeating the full font stack on hundreds of blocks can breach the
     // 20k content limit even when the visible article is short.
-    paragraph: `line-height:${layout.bodyLineHeight};text-align:${layout.paragraphAlign};white-space:pre-wrap;margin:${layout.paragraphGap}px 0;`,
-    inlineMark: theme.dark
-      ? `background:rgba(25,216,117,.16);color:${theme.accent};font-weight:700;padding:0 .18em;border-radius:3px;`
-      : `background:#fff1cf;color:${theme.ink};font-weight:700;padding:0 .18em;border-radius:3px;`,
+    // Keep paragraph markup and emphasis tags compact: each article paragraph
+    // now has a local core highlight, and repeated inline CSS can exceed the
+    // WeChat content limit on long, paragraph-heavy articles.
+    paragraph: compact ? '' : `margin:${layout.paragraphGap}px 0;`,
+    inlineMark: compact
+      ? (theme.dark ? 'background:#284532;' : 'background:#fff1cf;')
+      : theme.dark
+        ? `background:rgba(25,216,117,.16);color:${theme.accent};font-weight:700;padding:0 .18em;border-radius:3px;`
+        : `background:#fff1cf;color:${theme.ink};font-weight:700;padding:0 .18em;border-radius:3px;`,
     inlineStrong: `font-weight:700;color:${theme.dark ? theme.accent : theme.ink};`,
-    quote: `margin:${layout.quoteGap}px 0;padding:15px 17px;background:${softSurface};border-left:4px solid ${theme.accent};color:${mutedInk};line-height:1.85;`,
+    quote: `margin:${layout.quoteGap}px 0;padding:15px 17px;background:${softSurface};border-left:4px solid ${theme.accent};color:${mutedInk};line-height:1.85;text-align:left;`,
     imageFigure: theme.dark
       ? `margin:32px auto;text-align:center;padding:8px 8px 7px;background:${softSurface};border:1px solid ${themeLine};border-radius:8px;box-sizing:border-box;max-width:100%;`
       : 'margin:24px 0;text-align:center;',
     image: `width:100%;max-width:${imageMaxWidth};height:auto;display:block;margin:0 auto;border-radius:${layout.imageRadius}px;vertical-align:top;${theme.dark ? `border:0;background:${theme.articleBackground};` : ''}`,
     caption: `display:block;text-align:center;color:${mutedInk};font-size:12px;line-height:1.5;margin:8px 8px 0;overflow-wrap:anywhere;`,
-    coverFigure: 'margin:-24px -20px 24px;text-align:center;',
-    coverImage: 'width:100%;max-width:100%;height:auto;display:block;vertical-align:top;',
-    summary: `margin:10px 0 24px;padding:11px 13px;background:${softSurface};border-left:3px solid ${theme.accent};border-radius:0 7px 7px 0;font-size:13px;line-height:1.7;color:${mutedInk};`,
+    coverFigure: 'width:100%;max-width:100%;box-sizing:border-box;margin:0 auto 24px;text-align:center;',
+    coverImage: 'display:block;width:100%;max-width:100%;height:auto;margin:0 auto;object-fit:contain;object-position:center center;vertical-align:middle;',
+    summary: `margin:10px 0 24px;padding:11px 13px;background:${softSurface};border-left:3px solid ${theme.accent};border-radius:0 7px 7px 0;font-size:13px;line-height:1.7;color:${mutedInk};text-align:left;`,
     summaryLabel: `display:block;margin-bottom:3px;font-size:11px;font-weight:700;color:${theme.accent};`,
-    list: 'width:100%;max-width:100%;padding-left:24px;font-size:16px;line-height:1.9;margin:16px 0;overflow-wrap:anywhere;',
+    list: 'width:100%;max-width:100%;padding-left:24px;font-size:16px;line-height:1.9;margin:16px 0;overflow-wrap:anywhere;text-align:left;',
     listItem: 'margin:7px 0;line-height:1.8;overflow-wrap:anywhere;',
     tableWrap: 'width:100%;max-width:100%;overflow-x:auto;margin:20px 0;',
     table: 'width:100%;max-width:100%;border-collapse:collapse;table-layout:fixed;font-size:14px;',
@@ -1652,6 +1766,7 @@ export function renderArticleHtml(doc) {
   };
   const assets = doc.assets || [];
   const assetById = id => assets.find(asset => asset.id === id);
+  const redundantIntroBlockIds = getRedundantIntroBlockIds(doc);
   const coverBlock = getCoverBlock(doc);
   const coverAsset = getCoverAsset(doc);
   const coverMarkup = coverAsset?.dataUrl
@@ -1661,13 +1776,18 @@ export function renderArticleHtml(doc) {
   const renderInlineBlock = block => {
     if (coverBlock && block.id === coverBlock.id) return '';
     const text = renderInlineEmphasis(block.text || '', block.emphasisRanges, { markAttrs: ` style="${styles.inlineMark}"`, strongAttrs: ` style="${styles.inlineStrong}"`, markTag: 'span' });
+    const paragraphStyle = styles.paragraph ? ` style="${styles.paragraph}"` : '';
     if (block.type === 'heading') {
       const tag = Number(block.level) >= 3 ? 'h3' : 'h2';
       return `<${tag} style="${Number(block.level) >= 3 ? styles.subheading : styles.heading}">${text}</${tag}>`;
     }
     if (block.type === 'quote') return `<blockquote style="${styles.quote}">${text}</blockquote>`;
     if (block.type === 'list') {
-      const items = (block.items || String(block.text || '').split('\\n')).filter(Boolean).map(item => `<li style="${styles.listItem}">${escapeHtml(item)}</li>`).join('');
+      const items = (block.items || String(block.text || '').split('\n')).filter(Boolean).map((item, index) => {
+        const ranges = block.emphasisItemIndex === index ? block.emphasisRanges : [];
+        const inline = renderInlineEmphasis(item, ranges, { markAttrs: ` style="${styles.inlineMark}"`, strongAttrs: ` style="${styles.inlineStrong}"`, markTag: 'span' });
+        return `<li style="${styles.listItem}">${inline}</li>`;
+      }).join('');
       return `${block.ordered ? '<ol' : '<ul'} style="${styles.list}">${items}${block.ordered ? '</ol>' : '</ul>'}`;
     }
     if (block.type === 'table') {
@@ -1675,10 +1795,10 @@ export function renderArticleHtml(doc) {
       const rows = (block.rows || []).map(row => `<tr>${row.map(cell => `<td style="${styles.cell}">${escapeHtml(cell)}</td>`).join('')}</tr>`).join('');
       return `<div style="${styles.tableWrap}"><table style="${styles.table}"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
     }
-    if (block.type === 'cta') return `<div style="${styles.cta}"><p style="${styles.paragraph}">${text}</p><a style="${styles.ctaLink}" href="${escapeHtml(block.href || '#')}">${escapeHtml(block.buttonText || '立即了解')}</a></div>`;
+    if (block.type === 'cta') return `<div style="${styles.cta}"><p${paragraphStyle}>${text}</p><a style="${styles.ctaLink}" href="${escapeHtml(block.href || '#')}">${escapeHtml(block.buttonText || '立即了解')}</a></div>`;
     if (block.type === 'gallery') {
       const images = (block.assetIds || []).map(id => assetById(id)).filter(Boolean).map(asset => `<img style="${styles.galleryImage}" src="${escapeHtml(asset.dataUrl)}" ${imageDataAttributes(asset)} alt="${escapeHtml(asset.alt || asset.name)}">`).join('');
-      return `<div style="${styles.gallery}">${images || `<p style="${styles.paragraph}">${text}</p>`}</div>`;
+      return `<div style="${styles.gallery}">${images || `<p${paragraphStyle}>${text}</p>`}</div>`;
     }
     if (block.type === 'media') return `<div style="${styles.media}"><span>${escapeHtml(block.mediaType || 'media')}</span><a style="${styles.mediaLink}" href="${escapeHtml(block.url || '#')}">${text || '打开媒体内容'}</a></div>`;
     if (block.type === 'image') {
@@ -1688,10 +1808,20 @@ export function renderArticleHtml(doc) {
       const caption = imageCaption(block, asset, imageSequence);
       return `<figure style="${styles.imageFigure}" class="wechat-image-figure"><img style="${styles.image}" src="${escapeHtml(asset.dataUrl)}" ${imageDataAttributes(asset)} alt="${escapeHtml(asset.alt || block.text || asset.name || '文章配图')}">${caption ? `<figcaption style="${styles.caption}">${escapeHtml(caption)}</figcaption>` : ''}</figure>`;
     }
-    return `<p style="${styles.paragraph}">${text}</p>`;
+    return `<p${paragraphStyle}>${text}</p>`;
   };
-  const body = `${coverMarkup}<h1 style="${styles.title}">${escapeHtml(doc.title)}</h1>${doc.author?.trim() ? `<div style="${styles.meta}">${escapeHtml(doc.author)}</div>` : ''}<p style="${styles.summary}" data-wechat-summary="true"><span style="${styles.summaryLabel}">内容摘要</span><span>${escapeHtml(doc.subtitle || '')}</span></p>${(doc.blocks || []).map(renderInlineBlock).join('')}${renderArticleHashtags(doc, { container: styles.hashtags, list: '', tag: styles.hashtag })}`;
+  const body = `${coverMarkup}<h1 style="${styles.title}">${escapeHtml(doc.title)}</h1>${doc.author?.trim() ? `<div style="${styles.meta}">${escapeHtml(doc.author)}</div>` : ''}<p style="${styles.summary}" data-wechat-summary="true"><span style="${styles.summaryLabel}">内容摘要</span><span>${escapeHtml(doc.subtitle || '')}</span></p>${(doc.blocks || []).filter(block => !redundantIntroBlockIds.has(block.id)).map(renderInlineBlock).join('')}${renderArticleHashtags(doc, { container: styles.hashtags, list: '', tag: styles.hashtag })}`;
   return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(doc.title)}</title><article class="wechat-article" style="${styles.article}">${body}</article>`;
+}
+
+/** Return the exact article element used by the downloadable/publish HTML. */
+export function renderArticlePreview(doc) {
+  const html = renderArticleHtml(doc);
+  const marker = '<article class="wechat-article"';
+  const start = html.indexOf(marker);
+  const close = '</article>';
+  const end = html.lastIndexOf(close);
+  return start >= 0 && end >= start ? html.slice(start, end + close.length) : '';
 }
 
 export class VersionStore {

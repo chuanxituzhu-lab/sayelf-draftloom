@@ -1,4 +1,4 @@
-# Draftloom 公众号自动排版 v0.5.1
+# Draftloom 公众号自动排版 v0.6.0
 
 把 Markdown、TXT、DOCX、PDF 文章导入后，先在本机统一转换为 Markdown 中间稿，再按**识别 → 去 AI 味（可选）→ 提炼 → 排版 → 审核 → 提交**工作流处理：完成本地识别、清理特殊符号、正文自然化、提炼核心、智能排版、生成封面、手机预览，最后导出微信 HTML 或提交到公众号草稿箱。DOCX 优先调用 Microsoft 开源 MarkItDown 本地转换，未安装时回退到 Mammoth + Turndown；原始输入信息和 Markdown 中间稿保留用于回退。WebUI 顶部使用本地植入的 SAYELF 山野精灵 Logo，浏览器标签页也复用同一图标；新增“微信官方深色”可选视觉系统：深色底、绿色结构锚点、局部重点和居中留边的图片卡片。WebUI 预留共享 GSAP Motion Layer，需要动效时直接调用，不新增 Skill，也不把动效逻辑散落到各功能模块。
 
@@ -50,19 +50,29 @@ $env:PORT="4177"; npm start
 
 ## 最新版本下载
 
-当前本地版本：**v0.5.1**；GitHub 最新版本：**v0.5.1**
+当前本地版本：**v0.6.0**；GitHub 最新版本：**v0.6.0**
 
 - [打开 GitHub 仓库](https://github.com/chuanxituzhu-lab/sayelf-draftloom)
-- [下载最新 v0.5.1 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.5.1.zip)
-- [查看公众号排版 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.5.1/skill/SKILL.md)
-- [查看文章本地配图 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.5.1/skills/sayelf-article-visuals/SKILL.md)
+- [下载最新 v0.6.0 源码 ZIP](https://github.com/chuanxituzhu-lab/sayelf-draftloom/archive/refs/tags/v0.6.0.zip)
+- [查看公众号排版 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.6.0/skill/SKILL.md)
+- [查看文章本地配图 Skill](https://github.com/chuanxituzhu-lab/sayelf-draftloom/blob/v0.6.0/skills/sayelf-article-visuals/SKILL.md)
 
 源码 ZIP 已包含最新 Skill、WebUI、命令行工具和本地工作流；本地独立导出包仍保存在 `.local-data/exports/`，不上传到公开仓库。
 
 ## 客户能直接得到什么
 
+- **Three.js 本地主题图**：根据当前选中的文章段落选择自然、科技、工作或通用视觉主题，由本机 Three.js 渲染成 PNG 并插入所选段落后；公众号只收到静态图片，不会收到或执行 JavaScript。无 WebGL 时明确报错，原文和素材库不被覆盖。
+- **独立本机文章库**：公众号接口返回有效草稿编号后，自动把文章状态及实际提交 HTML 追加保存到 `.local-data/article-library/`。文章库可本机搜索、打开/复制、手动删除；“同步历史草稿”会在用户确认后读取公众号草稿，只追加、不覆盖，超过单次页数可继续同步。素材、文章、凭据不进入 GitHub，也不会自动发送给 AI。
+
 - **国内科技热词搜索核实**：关键词面板只读取 IT之家、量子位、极客公园的公开订阅，不访问海外站点、不发送文章正文。近 7 天至少两个独立来源、不同标题才标记“近期多源关注”；记录来源、链接、发布日期与检索时间，证据 24 小时后需更新。该信号不等于公众号热榜排名；网络失败、来源不足、转载重复或过期证据均不标为已核实。正文明确提及的科技词才规范为 `#ChatGPT`、`#Codex`、`#ClaudeCode`、`#WorkBuddy` 并显示在文章末尾。
 - **本地语义配图**：智能配图使用 JavaScript 本地生成 SVG，自动按文章语义将封面和章节插图放到匹配段落；可选“RAL 风格配色”。该风格不代表官方 RAL 色号，只有用户本机提供有授权的 RAL 色值文件时才可引用官方色值。文章和素材不发送到外部图像服务。
+
+## v0.6.0 更新
+
+- 本地新增 Three.js 语义主题渲染器，结果以微信兼容 PNG 插入正文；不向公众号正文植入 Three.js 或其他可执行脚本。
+- 新增 `.local-data/article-library/` 独立文章档案：确认成功的草稿自动追加归档，可按需从公众号同步旧草稿；以草稿媒体编号和图文序号去重，不覆盖既有档案。
+- 公众号草稿列表读取只在用户点“同步历史草稿”并确认后发生；凭据在本机解析，错误提示不回显 token。所有同步内容留在本机，不自动训练或外发。
+- 依赖审计：当前生产依赖链仍有 3 项 npm 中危告警，来自 Mammoth → argparse → sprintf-js；npm 建议的强制修复会把 Mammoth 降到不兼容的旧主版本。本版本保留正常 DOCX 转换能力并披露风险，不做未经验证的破坏性降级。
 
 - **自动识别文章**：支持 Markdown、TXT、DOCX、PDF；DOCX 优先由 Microsoft 开源 MarkItDown 转为 Markdown，未安装时回退到 Mammoth→Turndown，PDF/TXT 也统一进入 Markdown 中间稿。
 - **自动调用转换器**：按文件类型自动选择 DOCX→MarkItDown（不可用时 Mammoth→Turndown）、PDF→本地文本→Markdown、MD/TXT→规范化；无需再次点击转换，失败会明确停在识别阶段。

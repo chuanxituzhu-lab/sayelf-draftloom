@@ -1,4 +1,4 @@
-import { createInitialDocument, parseCommand, reduceDocument, VersionStore, getLayoutGuidance, generateLayoutGuidance, THEMES, normalizeTheme, getWechatLayoutVariables, renderDocumentBody, renderArticleHtml, renderInlineEmphasis, withCoverPreviewDraft } from './core.js';
+import { createInitialDocument, parseCommand, reduceDocument, VersionStore, getLayoutGuidance, generateLayoutGuidance, THEMES, normalizeTheme, TITLE_FONT_SIZES, getWechatLayoutProfile, renderArticlePreview, renderArticleHtml, renderInlineEmphasis, withCoverPreviewDraft } from './core.js';
 import { renderCoverCopyOverlaySvg } from './cover.js';
 import { analyzeGrowth, getDefaultGrowthProfile, growthBrief, normalizeGrowthProfile } from './growth.js';
 import { WECHAT_LIMITS, inspectWechatArticle, inspectWechatCover, inspectWechatAssetPlan, formatBytes, plannedWechatImageType } from './wechat-limits.js';
@@ -24,6 +24,11 @@ let store = new VersionStore(doc);
 let status = '就绪';
 let submissionToastDismissed = false;
 let libraryTab = 'mine';
+let articleLibraryItems = [];
+let articleLibraryDetail = null;
+let articleLibraryQuery = '';
+let articleLibraryStatus = '';
+let articleLibrarySyncOffset = 0;
 let scriptDraft = null;
 let assetQuery = '';
 let assetSort = 'recent';
@@ -40,6 +45,7 @@ let hotTopicsText = loadHotTopics();
 let previewCoverAsset = null;
 let previewCoverSource = '';
 let previewCoverRequest = 0;
+let previewDraftCoverRequest = 0;
 
 function loadDocument() {
   try {
@@ -179,8 +185,9 @@ function assetById(id) { return doc.assets.find(a => a.id === id); }
 function currentCoverBlock() { return doc.blocks.find(block => block.type === 'image' && block.visualRole === 'cover') || doc.blocks.find(block => block.type === 'image') || null; }
 function currentCoverAsset() { const block = currentCoverBlock(); return block ? assetById(block.assetId) : null; }
 function hasPreviewCover(asset) {
-  return Boolean(asset?.dataUrl && previewCoverAsset?.id === asset.id && previewCoverSource === asset.dataUrl);
+  return Boolean(asset?.dataUrl && previewCoverAsset?.id === asset.id && previewCoverSource === coverPreviewKey(asset));
 }
+function coverPreviewKey(asset = {}) { return [asset.dataUrl || '', asset.coverMain || '', asset.coverSub || '', asset.visualRole || '', asset.source || ''].join('\u0000'); }
 function getPreviewCoverAsset(asset) {
   return hasPreviewCover(asset) ? previewCoverAsset : asset;
 }
@@ -201,12 +208,12 @@ async function syncPreviewCover() {
     const raster = await rasterizeWechatCover(asset);
     if (request !== previewCoverRequest || currentCoverAsset()?.dataUrl !== source) return;
     previewCoverAsset = raster;
-    previewCoverSource = source;
+    previewCoverSource = coverPreviewKey(asset);
     render();
   } catch (error) {
     if (request !== previewCoverRequest || currentCoverAsset()?.dataUrl !== source) return;
     previewCoverAsset = asset;
-    previewCoverSource = source;
+    previewCoverSource = coverPreviewKey(asset);
     setStatus(`封面预览自动转换失败：${error.message}`);
   }
 }
@@ -225,7 +232,12 @@ function assetInUse(assetId) {
   return doc.blocks.some(block => block.assetId === assetId || (block.assetIds || []).includes(assetId));
 }
 function renderLibraryPane() {
-  const tabs = [['mine', '我的素材'], ['resource', '资源库'], ['script', '文字稿']].map(([id, label]) => `<button class="library-tab ${libraryTab === id ? 'active' : ''}" data-library-tab="${id}">${label}</button>`).join('');
+  const tabs = [['mine', '我的素材'], ['resource', '资源库'], ['articles', '文章库'], ['script', '文字稿']].map(([id, label]) => `<button class="library-tab ${libraryTab === id ? 'active' : ''}" data-library-tab="${id}">${label}</button>`).join('');
+  if (libraryTab === 'articles') {
+    const entries = articleLibraryItems.length ? articleLibraryItems.map(item => `<div class="article-library-item"><button class="article-library-open" data-open-library-article="${esc(item.id)}"><strong>${esc(item.title)}</strong><small>${item.source === 'synced-from-wechat' ? '公众号历史草稿' : '本机提交成功'} · ${esc(new Date(item.savedAt).toLocaleString())}</small><span>${esc(item.digest || item.excerpt || '')}</span></button><button class="article-library-delete" data-delete-library-article="${esc(item.id)}" title="从本机文章库删除">×</button></div>`).join('') : `<div class="empty article-library-empty">${articleLibraryStatus || '尚无归档文章；提交成功后会自动累积保存'}</div>`;
+    const detail = articleLibraryDetail ? `<section class="article-library-detail"><div class="article-library-detail-head"><strong>${esc(articleLibraryDetail.title || '文章')}</strong><button data-close-library-detail>收起</button></div><div class="article-library-detail-tools"><button data-copy-library-article>复制正文</button>${articleLibraryDetail.doc ? `<button data-restore-library-article="${esc(articleLibraryDetail.id)}">打开编辑</button>` : `<button data-import-library-article="${esc(articleLibraryDetail.id)}">导入为新稿</button>`}</div><pre>${esc(articleLibraryDetail.text || '正文内容为空')}</pre><small>仅本机保存和检索；不会自动发送给 AI 或上传到 GitHub。</small></section>` : '';
+    return `<div class="library-header"><div class="library-tabs">${tabs}</div><div class="article-library-toolbar"><input id="articleLibrarySearch" value="${esc(articleLibraryQuery)}" placeholder="搜索本机文章"><button data-search-library-articles>搜索</button><button data-sync-library-articles title="需确认后读取公众号草稿列表">${articleLibrarySyncOffset ? '继续同步历史草稿' : '同步历史草稿'}</button></div><div class="article-library-status">${esc(articleLibraryStatus || `本地文章 ${articleLibraryItems.length} 篇 · 提交成功自动归档`)}</div></div><div class="article-library-list">${entries}</div>${detail}`;
+  }
   if (libraryTab === 'script') {
     const source = doc.original?.text || doc.blocks.filter(block => block.type !== 'image').map(block => block.text || '').join('\n\n');
     return `<div class="library-header"><div class="library-tabs">${tabs}</div><div class="script-tools"><span>文字稿（可直接粘贴编辑）</span><button data-copy-script>复制原稿</button></div></div><textarea id="scriptInput" class="script-view" aria-label="文字稿输入" placeholder="在这里粘贴文章，然后点击下方按钮">${esc(scriptDraft ?? source)}</textarea><button data-analyze-script class="primary-button">分析并生成创作建议</button>`;
@@ -242,6 +254,41 @@ function refreshLibraryPane() {
   if (!pane) return;
   pane.innerHTML = renderLibraryPane();
   bindLibraryEvents();
+}
+async function loadArticleLibrary() {
+  try {
+    const query = new URLSearchParams({ q: articleLibraryQuery }).toString();
+    const result = await fetchLocalApi(`/api/article-library?${query}`, {}, '读取本机文章库');
+    articleLibraryItems = Array.isArray(result.entries) ? result.entries : [];
+    articleLibraryStatus = `本地文章 ${articleLibraryItems.length} 篇 · 不会自动上传`;
+  } catch (error) { articleLibraryStatus = requestError(error, '读取本机文章库失败'); }
+  refreshLibraryPane();
+}
+async function showArticleLibraryEntry(id) {
+  try {
+    const result = await fetchLocalApi(`/api/article-library/${encodeURIComponent(id)}`, {}, '打开本机文章');
+    articleLibraryDetail = result.entry || null;
+  } catch (error) { articleLibraryStatus = requestError(error, '打开本机文章失败'); }
+  refreshLibraryPane();
+}
+async function syncArticleLibraryFromWechat() {
+  if (!window.confirm('将从公众号草稿箱读取现有文章，并只保存到本机文章库。继续吗？')) return;
+  const button = document.querySelector('[data-sync-library-articles]');
+  if (button) { button.disabled = true; button.textContent = '正在同步…'; }
+  articleLibraryStatus = '正在读取公众号草稿列表…';
+  refreshLibraryPane();
+  try {
+    const result = await fetchLocalApi('/api/article-library/sync', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true, offset: articleLibrarySyncOffset }) }, '同步公众号历史草稿');
+    articleLibrarySyncOffset = result.nextOffset || 0;
+    await loadArticleLibrary();
+    articleLibraryStatus = result.complete
+      ? `同步完成：新增 ${result.imported || 0} 篇，发现 ${result.seen || 0} 篇；只保存在本机`
+      : `已同步 ${result.seen || 0} 篇，新增 ${result.imported || 0} 篇；公众号草稿较多，可继续同步（只保存在本机）`;
+    refreshLibraryPane();
+  } catch (error) {
+    articleLibraryStatus = requestError(error, '同步公众号历史草稿失败');
+    refreshLibraryPane();
+  }
 }
 function renderArticleHistory() {
   const cards = articleHistory.length
@@ -588,7 +635,7 @@ function render() {
     <header class="topbar">
       <div class="brand-lockup"><img class="app-logo-mark" src="/assets/sayelf-logo.png" alt="SAYELF 山野精灵" width="34" height="34"><span class="brand-copy"><strong>公众号排版</strong><small>Draftloom · SAYELF</small></span><span class="badge">MVP v${APP_VERSION}</span></div>      <div class="top-actions">
         <button id="undoBtn">↶ 回滚</button><button id="redoBtn">↷ 重做</button><button id="clearArticleBtn" title="自动保存当前文章后清空，可重新上传">清空重传</button>
-        <select id="visualPalette" aria-label="配图色彩方案" title="本地插图色彩方案；RAL 风格并非官方 RAL 色值"><option value="default">默认配色</option><option value="ral-inspired">RAL 风格配色</option></select><button id="visualComposeBtn" title="本地生成封面和章节插图，按文章语义自动插入相应段落">智能配图与标题</button><button id="assetAutoFillBtn" title="使用本地文件名、替代文字和已有图片描述匹配封面及相关章节；低置信素材不会硬插入">匹配素材到文章</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
+        <select id="visualPalette" aria-label="配图色彩方案" title="本地插图色彩方案；RAL 风格并非官方 RAL 色值"><option value="default">默认配色</option><option value="ral-inspired">RAL 风格配色</option></select><button id="visualComposeBtn" title="本地生成封面和章节插图，按文章语义自动插入相应段落">智能配图与标题</button><button id="threeVisualBtn" title="依据当前选中文章段落生成本地 Three.js 主题图并插在该段后；最终进入公众号的是 PNG 图片，不是脚本">3D主题图</button><button id="assetAutoFillBtn" title="使用本地文件名、替代文字和已有图片描述匹配封面及相关章节；低置信素材不会硬插入">匹配素材到文章</button><button id="layoutAutoBtn" title="自动优化字体、段落、标题层级、重点色块和手机阅读节奏">一键优化排版</button><button id="wechatOptimizeBtn" title="蒸馏正文并同步优化标题、作者、摘要、封面文案，动态刷新公众号页面预览">智能优化发布约束</button><button id="workflowRunTopBtn" class="workflow-run-top-button" title="点击一次，自动完成识别、提炼、排版和公众号审核">一键执行1-4</button><button id="draftBtn" class="primary-button">导出到微信草稿箱</button><button id="exportHtmlBtn">导出微信 HTML</button>
         <label class="button primary-button">导入文章+图片<input id="articleImportInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden></label>
       </div>
     </header>
@@ -608,14 +655,14 @@ function render() {
         ${renderWechatLimits()}
         ${renderHumanizerPanel()}
         ${renderCoverSummaryPanel()}
-        <div class="title-editor"><div class="title-row"><input id="titleInput" maxlength="${WECHAT_LIMITS.titleChars}" value="${esc(doc.title)}" aria-label="标题"><button id="viralTitleBtn" type="button" title="根据文章核心结论生成简洁、结论先行的标题候选，并显示正文依据；不预测阅读量">生成标题建议</button></div><input id="authorInput" maxlength="${WECHAT_LIMITS.authorChars}" value="${esc(doc.author || '')}" aria-label="作者" placeholder="作者（可选，最多 16 字）"><div class="title-ai-panel">${renderTitlePlan()}</div></div>
+        <div class="title-editor"><div class="title-row"><input id="titleInput" maxlength="${WECHAT_LIMITS.titleChars}" value="${esc(doc.title)}" aria-label="标题"><button id="viralTitleBtn" type="button" title="根据文章核心结论生成简洁、结论先行的标题候选，并显示正文依据；不预测阅读量">生成标题建议</button></div><input id="authorInput" maxlength="${WECHAT_LIMITS.authorChars}" value="${esc(doc.author || '')}" aria-label="作者" placeholder="作者（可选，最多 16 字）"><label class="title-font-size-control" for="titleFontSizeSelect"><span>标题字号</span><select id="titleFontSizeSelect" aria-label="标题字号">${TITLE_FONT_SIZES.map(size => `<option value="${size}" ${getWechatLayoutProfile(doc).titleFontSize === size ? 'selected' : ''}>${size}px</option>`).join('')}</select></label><div class="title-ai-panel">${renderTitlePlan()}</div></div>
         ${renderKeywordPanel()}
         <div class="blocks">${doc.blocks.filter(block => !(block.type === 'image' && block.visualRole === 'cover')).map(renderEditorBlock).join('')}</div>
         <div class="insert-row"><button data-add="heading">+ 标题</button><button data-add="paragraph">+ 段落</button><button data-add="quote">+ 引用</button><button data-add="list">+ 列表</button><button data-add="table">+ 表格</button><button data-add="cta">+ CTA</button><button data-add="gallery">+ 画廊</button><button data-add="media">+ 媒体</button></div>
       </section>
       <aside class="panel preview-panel">
         <div class="preview-toolbar"><div><b>微信文章实时预览</b><span>仅视觉缩放，不改变内容</span></div><div class="preview-controls"><label>主题<select id="themeSelect">${Object.values(THEMES).map(theme => `<option value="${theme.id}" ${normalizeTheme(doc.theme) === theme.id ? 'selected' : ''}>${theme.label}</option>`).join('')}</select></label><button id="wechatCheckBtn" class="check-button" title="只检查微信字段、正文、封面和素材，不修改文章">一键检测</button><div class="zoom"><button id="zoomOut">−</button><span id="zoomText">${Math.round(zoom*100)}%</span><button id="zoomIn">＋</button><button id="zoomReset">1:1</button></div></div></div>
-        <div class="phone-stage"><article class="wechat-article theme-${normalizeTheme(doc.theme)}" style="transform:scale(${zoom});${getWechatLayoutVariables(doc)}">${renderPreview()}</article></div>
+        <div class="phone-stage"><div class="wechat-preview-scale" style="transform:scale(${zoom})">${renderPreview()}</div></div>
       </aside>
     </main>
     <footer class="statusbar"><span id="statusText" role="status" aria-live="polite">${esc(status)}</span><span id="revisionText">v${doc.meta.revision} · ${new Date(doc.meta.updatedAt).toLocaleTimeString()}</span></footer>
@@ -671,7 +718,7 @@ function renderEditorBlock(b) {
   return `<div class="block ${b.id===selectedId?'selected':''}" data-block="${b.id}"><div class="editable ${cls}" contenteditable="true" spellcheck="false" data-edit="${b.id}">${renderInlineEmphasis(b.text, b.emphasisRanges)}</div><div class="block-tools"><button data-move="-1">↑</button><button data-move="1">↓</button><button data-delete>删除</button></div></div>`;
 }
 
-function renderPreview() {
+function renderPreview(coverOverride = null) {
   const cover = currentCoverAsset();
   const previewCover = getPreviewCoverAsset(cover);
   const mainDraft = document.querySelector('#coverMainInput')?.value;
@@ -681,10 +728,10 @@ function renderPreview() {
   const subManuallyEdited = document.querySelector('#coverSubInput')?.dataset.manualDraft === 'true';
   const hasDraft = mainDraft !== undefined || subDraft !== undefined || summaryDraft !== undefined;
   const previewDocBase = withCoverPreviewDraft(doc, { summary: summaryDraft, mainManuallyEdited, subManuallyEdited });
-  if (!cover || !previewCover) return renderDocumentBody(previewDocBase);
-  if (previewCover.dataUrl === cover.dataUrl && !hasDraft) return renderDocumentBody(doc);
-  let draftCover = previewCover;
-  if (hasDraft && cover.generated && cover.source === 'draftloom:creative-local') {
+  if (!cover || !previewCover) return renderArticlePreview(previewDocBase);
+  if (!coverOverride && previewCover.dataUrl === cover.dataUrl && !hasDraft) return renderArticlePreview(doc);
+  let draftCover = coverOverride || previewCover;
+  if (!coverOverride && hasDraft && cover.generated && cover.source === 'draftloom:creative-local') {
     draftCover = createCreativeAsset({
       id: cover.id,
       title: mainDraft ?? cover.coverMain ?? doc.title,
@@ -695,21 +742,33 @@ function renderPreview() {
       role: 'cover'
     });
     Object.assign(draftCover, { width: previewCover.width, height: previewCover.height });
-  } else if (hasDraft) {
+  } else if (!coverOverride && hasDraft) {
     draftCover = { ...previewCover, coverMain: mainDraft ?? cover.coverMain, coverSub: subDraft ?? cover.coverSub };
   }
   const previewDoc = {
     ...previewDocBase,
     assets: doc.assets.map(asset => asset.id === cover.id ? draftCover : asset)
   };
-  return renderDocumentBody(previewDoc);
+  return renderArticlePreview(previewDoc);
 }
 
 function refreshCoverPreview(event) {
   if (event?.target?.dataset) event.target.dataset.manualDraft = 'true';
-  const article = document.querySelector('.phone-stage .wechat-article');
-  if (!article) return;
-  article.innerHTML = renderPreview();
+  const preview = document.querySelector('.phone-stage .wechat-preview-scale');
+  if (!preview) return;
+  preview.innerHTML = renderPreview();
+  if (!['coverMainInput', 'coverSubInput'].includes(event?.target?.id)) return;
+  const cover = currentCoverAsset();
+  if (!cover?.dataUrl || (cover.generated && cover.source === 'draftloom:creative-local')) return;
+  const main = document.querySelector('#coverMainInput')?.value ?? cover.coverMain ?? '';
+  const sub = document.querySelector('#coverSubInput')?.value ?? cover.coverSub ?? '';
+  const request = ++previewDraftCoverRequest;
+  void rasterizeWechatCover({ ...cover, coverMain: main, coverSub: sub }).then(raster => {
+    if (request !== previewDraftCoverRequest || !preview.isConnected) return;
+    preview.innerHTML = renderPreview(raster);
+  }).catch(error => {
+    if (request === previewDraftCoverRequest) setStatus(`封面文字预览更新失败：${error.message}`);
+  });
 }
 
 function renderGuidance() {
@@ -949,7 +1008,25 @@ async function runWechatCheck() {
 }
 
 function bindLibraryEvents() {
-  document.querySelectorAll('[data-library-tab]').forEach(el => el.onclick = () => { libraryTab = el.dataset.libraryTab; assetQuery = ''; assetFilter = 'all'; refreshLibraryPane(); });
+  document.querySelectorAll('[data-library-tab]').forEach(el => el.onclick = () => { libraryTab = el.dataset.libraryTab; assetQuery = ''; assetFilter = 'all'; articleLibraryDetail = null; refreshLibraryPane(); if (libraryTab === 'articles') loadArticleLibrary(); });
+  const articleSearch = document.querySelector('#articleLibrarySearch');
+  const searchArticles = document.querySelector('[data-search-library-articles]');
+  if (articleSearch) articleSearch.onkeydown = event => { if (event.key === 'Enter') { articleLibraryQuery = articleSearch.value.trim(); loadArticleLibrary(); } };
+  if (searchArticles) searchArticles.onclick = () => { articleLibraryQuery = articleSearch?.value.trim() || ''; loadArticleLibrary(); };
+  const syncArticles = document.querySelector('[data-sync-library-articles]');
+  if (syncArticles) syncArticles.onclick = syncArticleLibraryFromWechat;
+  document.querySelectorAll('[data-open-library-article]').forEach(el => el.onclick = () => showArticleLibraryEntry(el.dataset.openLibraryArticle));
+  document.querySelectorAll('[data-delete-library-article]').forEach(el => el.onclick = async () => {
+    if (!window.confirm('确定从本机文章库删除这篇文章？不会影响公众号草稿箱。')) return;
+    try { await fetchLocalApi(`/api/article-library/${encodeURIComponent(el.dataset.deleteLibraryArticle)}`, { method: 'DELETE' }, '删除本机文章'); articleLibraryDetail = null; await loadArticleLibrary(); }
+    catch (error) { articleLibraryStatus = requestError(error, '删除本机文章失败'); refreshLibraryPane(); }
+  });
+  const closeDetail = document.querySelector('[data-close-library-detail]');
+  if (closeDetail) closeDetail.onclick = () => { articleLibraryDetail = null; refreshLibraryPane(); };
+  const copyArticle = document.querySelector('[data-copy-library-article]');
+  if (copyArticle) copyArticle.onclick = async () => { try { await navigator.clipboard.writeText(articleLibraryDetail?.text || ''); articleLibraryStatus = '正文已复制'; refreshLibraryPane(); } catch { articleLibraryStatus = '复制失败，请手动选择正文'; refreshLibraryPane(); } };
+  document.querySelectorAll('[data-restore-library-article]').forEach(el => el.onclick = () => { const entry = articleLibraryDetail; if (!entry?.doc) return; replaceCurrentDocument(entry.doc, `从文章库打开：${entry.title}`); setStatus(`已从本机文章库打开：${entry.title}`); });
+  document.querySelectorAll('[data-import-library-article]').forEach(el => el.onclick = () => { const entry = articleLibraryDetail; if (!entry?.text) return; handleArticleImport([], entry.text); });
   const search = document.querySelector('#assetSearch');
   if (search) search.oninput = e => { assetQuery = e.target.value; refreshLibraryPane(); const next = document.querySelector('#assetSearch'); next?.focus(); next?.setSelectionRange(assetQuery.length, assetQuery.length); };
   const sort = document.querySelector('[data-library-sort]');
@@ -1051,6 +1128,7 @@ function bindEvents() {
     button.onclick = runLocalPublishingWorkflow;
   });
   document.querySelector('#titleInput').onchange=e=>commit({type:'setTitle',text:e.target.value.trim()},'修改标题');
+  document.querySelector('#titleFontSizeSelect').onchange=e=>commit({type:'setTitleFontSize',fontSize:Number(e.target.value)},'调整标题字号');
   document.querySelector('#authorInput').onchange=e=>commit({type:'setAuthor',text:e.target.value.trim()},'修改作者');
   document.querySelector('#subtitleInput').oninput=refreshCoverPreview;
   document.querySelector('#subtitleInput').onchange=e=>commit({type:'setSubtitle',text:e.target.value.trim()},'修改内容摘要');
@@ -1110,6 +1188,23 @@ function bindEvents() {
   document.querySelector('#zoomOut').onclick=()=>setZoom(zoom-.1); document.querySelector('#zoomIn').onclick=()=>setZoom(zoom+.1); document.querySelector('#zoomReset').onclick=()=>setZoom(1);
   document.querySelector('#draftBtn').onclick=openDraftDialog;
   document.querySelector('#visualComposeBtn').onclick=()=>commit({type:'autoComposeVisuals',generate:true,maxGenerated:3,autoImageCount:true,titleMode:'viral',colorPalette:document.querySelector('#visualPalette')?.value||'default'},'智能配图与标题');
+  document.querySelector('#threeVisualBtn').onclick=async event=>{
+    const button = event.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true; button.textContent = '本地渲染中…';
+    try {
+      const { createThreeArticleImage } = await import('./three-visuals.js');
+      const anchor = doc.blocks.find(block => block.id === selectedId && block.type !== 'image') || doc.blocks.find(block => block.type === 'heading' || block.type === 'paragraph');
+      const core = doc.meta?.visualPlan?.coreContent;
+      const sourceText = String(anchor?.text || core?.summary || doc.subtitle || doc.title || '').trim();
+      if (!sourceText) throw new Error('先录入文章，或选择一段正文作为主题依据');
+      const asset = await createThreeArticleImage({ text: sourceText, title: doc.title, palette: document.querySelector('#visualPalette')?.value || 'ral-inspired' });
+      asset.size = Math.floor((asset.dataUrl.length - asset.dataUrl.indexOf(',') - 1) * 0.75);
+      const result = commit({ type: 'insertGeneratedAsset', asset, afterId: anchor?.id || selectedId }, '本地 Three.js 主题图');
+      if (result) setStatus('已生成并插入本地 3D 主题 PNG；公众号正文不包含 Three.js 脚本');
+    } catch (error) { setStatus(error.message || '本地 3D 主题图生成失败'); }
+    finally { button.disabled = false; button.textContent = '3D主题图'; }
+  };
   document.querySelector('#coverAutoBtn').onclick=()=>commit({type:'smartCover'},'封面一键设置');
   const titleImageButton = document.querySelector('#titleImageAutoBtn');
   if (titleImageButton && !document.querySelector('#coreThemeImagesBtn')) {
@@ -1204,7 +1299,7 @@ function bindEvents() {
     try { await navigator.clipboard.writeText(growthBriefText(growthReport.brief)); setStatus('创作简报已复制，可交给 Agent 继续创作'); } catch { setStatus('复制失败，请展开分析结果后手动记录'); }
   };
 }
-function setZoom(v){ zoom=Math.min(1.4,Math.max(.6,Math.round(v*10)/10)); const article=document.querySelector('.wechat-article'); article.style.transform=`scale(${zoom})`; document.querySelector('#zoomText').textContent=`${Math.round(zoom*100)}%`; }
+function setZoom(v){ zoom=Math.min(1.4,Math.max(.6,Math.round(v*10)/10)); const preview=document.querySelector('.wechat-preview-scale'); if(preview)preview.style.transform=`scale(${zoom})`; document.querySelector('#zoomText').textContent=`${Math.round(zoom*100)}%`; }
 async function handleAssets(e){
   const files=[...e.target.files].slice(0, Math.max(0, MAX_ASSETS - doc.assets.length));
   if(!files.length){if(e.target.files.length)setStatus(`本地素材库已达 ${MAX_ASSETS} 张上限；请手动删除不需要的素材后再上传`);return;}
@@ -1333,7 +1428,9 @@ async function submitDraftToWechat({skipConfirm=false}={}){
       doc = recordWorkflowSubmission(doc, result.delivery);
       persist();
       refreshWorkflowPanel();
-      setStatus(`草稿已进入公众号草稿箱${draftId?`（${draftId}）`:''}，请人工审核后发送`);
+      const archiveMessage = result.articleLibrary?.created === true ? '并已保存到本机文章库' : result.articleLibrary?.warning || '本机文章库中已有此草稿记录';
+      statusEl.innerHTML += `<span>${esc(archiveMessage)}</span>`;
+      setStatus(`草稿已进入公众号草稿箱${draftId?`（${draftId}）`:''}，${archiveMessage}`);
     } else {
       throw new Error(result.delivery?.error || '微信接口未确认草稿创建，未能判定为提交成功。请先到公众号草稿箱核实，避免重复提交。');
     }

@@ -31,6 +31,9 @@ const PALETTES = Object.freeze({
   minimal: { bg: '#eef6f2', ink: '#153b2e', accent: '#1f9d72', soft: '#a9dfc7' },
   editorial: { bg: '#f7eee5', ink: '#4c3022', accent: '#a8683e', soft: '#e2baa0' },
   fresh: { bg: '#eaf8f8', ink: '#174650', accent: '#218a9b', soft: '#a9dfe2' },
+  ink: { bg: '#f2effb', ink: '#302745', accent: '#7657b8', soft: '#c8bce8' },
+  sunset: { bg: '#fff0e7', ink: '#4a2a22', accent: '#e45f3f', soft: '#f4c2a1' },
+  official: { bg: '#17201b', ink: '#e8eeeb', accent: '#19d875', soft: '#26362d' },
   ralInspired: { bg: '#edf2e8', ink: '#26362a', accent: '#567d46', soft: '#c4d3ad' }
 });
 
@@ -40,6 +43,45 @@ function clean(value = '') { return String(value).replace(/\s+/g, ' ').trim(); }
 function truncate(value, max = 32) {
   const chars = [...clean(value)];
   return chars.length <= max ? chars.join('') : `${chars.slice(0, Math.max(1, max - 1)).join('')}…`;
+}
+const TITLE_SUGGESTION_PREFERRED_CHARS = 16;
+function conciseTitleFromEvidence(sentence) {
+  let title = clean(sentence)
+    .replace(/^(?:总的来说|综上所述|值得注意的是|需要注意的是|一个现实问题是|结论是|总之|因此|所以)[，,：:\s]*/, '')
+    .replace(/[。！？!?；;]+$/, '')
+    .trim();
+
+  // Reorder two common conclusion forms without adding claims beyond the evidence.
+  title = title
+    .replace(/([A-Za-z0-9])\s+(?=[\u4e00-\u9fff])/g, '$1')
+    .replace(/^真正决定(.+?)的[，,：:]是(.+)$/, (_match, outcome, reason) => {
+      const compactReason = reason.replace(/清晰的|明确的/g, match => match.slice(0, -1)).replace(/人的/g, '');
+      return `${compactReason}决定${outcome}`;
+    })
+    .replace(/^(.+?)可以帮助(?:人们|大家)?(解决|完成|处理|减少|增加|降低|提升|避免)(.+)$/, '$1能$2$3')
+    .replace(/^(.+?)越来越多[，,：:]真正(.+?)的却未必越来越多$/, '$1越多，$2未必越多');
+
+  const isCompleteClause = clause => {
+    const value = clean(clause);
+    return [...value].length >= 4
+      && [...value].length <= TITLE_SUGGESTION_PREFERRED_CHARS
+      && !/^[，,：:；;、]|^(?:而且|但是|不过|所以|因此|并且|同时|如果|因为|例如|比如)/.test(value)
+      && !/(?:读者可以自行思考|可以自行思考|值得关注|值得一看|值得分享|继续探索|引发思考)/.test(value)
+      && !/[的是和与但却而在为把被将能可需应让的了着过及或]$/.test(value)
+      && /决定|解决|影响|取决|意味着|说明|方法|结果|选择|需要|应该|才能|可以|未必|应用|改变|带来|降低|提升|避免|成为|形成|实现|增加|减少|越多|越少|不再|不是|而是|是|有|能|会|让|用/.test(value);
+  };
+
+  if (isCompleteClause(title)) return title;
+
+  // Prefer a complete, conclusion-bearing clause over cutting a sentence mid-thought.
+  const clauses = title.split(/[，,：:；;—–]/).map(clean).filter(isCompleteClause);
+  const signals = /结论|决定|解决|关键|核心|需要|应该|才能|可以|未必|影响|取决|意味着|说明|方法|结果|选择|不/;
+  clauses.sort((a, b) => {
+    const aScore = (signals.test(a) ? 6 : 0) + Math.min([...a].length, 16) - Math.abs([...a].length - 14) * 0.2;
+    const bScore = (signals.test(b) ? 6 : 0) + Math.min([...b].length, 16) - Math.abs([...b].length - 14) * 0.2;
+    return bScore - aScore;
+  });
+  return clauses[0] || '';
 }
 function escapeXml(value = '') {
   return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[character]));
@@ -383,9 +425,7 @@ export function generateViralTitlePlan({ text = '', filename = '', currentTitle 
   const addCandidate = (sentence, type = 'TOPIC', knownIndex = null) => {
     const evidence = clean(sentence);
     if (!evidence || !sourceSentences.includes(evidence)) return;
-    const title = truncate(evidence
-      .replace(/^(?:(?:所以|因此|总之|由此可见|结论是|归根结底)[，,：:\s]*)/, '')
-      .replace(/[。！？!?；;]+$/, ''), WECHAT_LIMITS.titleChars);
+    const title = conciseTitleFromEvidence(evidence);
     if ([...title].length < 4 || seen.has(title)) return;
     seen.add(title);
     const sentenceIndex = Number.isInteger(knownIndex) ? knownIndex : sourceSentences.indexOf(evidence);
@@ -393,7 +433,7 @@ export function generateViralTitlePlan({ text = '', filename = '', currentTitle 
     candidates.push({
       pattern: type.toLowerCase(),
       title,
-      rationale: `结论先行 · ${label}`,
+      rationale: `结论先行 · 简短明了 · ${label}`,
       evidence: { source: 'article-body', sentence: evidence, sentenceIndex, type }
     });
   };
@@ -407,7 +447,7 @@ export function generateViralTitlePlan({ text = '', filename = '', currentTitle 
   ];
   for (const item of supporting) addCandidate(item.sentence, item.type, item.index);
   candidates.splice(Math.max(1, Math.min(8, Number(limit) || 5)));
-  const selected = candidates[0]?.title || clean(currentTitle);
+  const selected = candidates[0]?.title || '';
   return {
     mode: 'viral',
     strategy: 'conclusion-first-hook',
@@ -418,7 +458,7 @@ export function generateViralTitlePlan({ text = '', filename = '', currentTitle 
     candidates,
     generatedAt: new Date().toISOString(),
     note: candidates.length
-      ? '先呈现文章核心结论，再用正文已有观点或方法形成钩子；每条均附正文依据。不预测阅读量或保证爆款，发布前请核对标题与全文是否一致。'
+      ? `从文章核心结论提炼完整短句，最多 ${TITLE_SUGGESTION_PREFERRED_CHARS} 字；每条均附正文依据，不拼接碎片、不预测阅读量。若无法在字数内保留完整语义则不生成，采纳前请核对全文。`
       : '正文缺少足够的核心句，暂不生成标题候选；请补充正文后再试。'
   };
 }
@@ -691,18 +731,97 @@ export function planVisualLayout(doc = {}, { maxGenerated = 3, includeCover = tr
 function paletteFor(theme = 'minimal') { return PALETTES[theme] || PALETTES.minimal; }
 function svgDataUrl(svg) { return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`; }
 
+function inferVisualTopic(title = '', keywords = []) {
+  const text = `${title} ${keywords.join(' ')}`.toLowerCase();
+  if (/\b(?:ai|llm|agent|codex|claude|chatgpt|robot|software|code)\b|人工智能|大模型|智能体|自动化|编程|软件|算法|数据|科技/u.test(text)) return 'technology';
+  if (/自然|山野|森林|茶|植物|生态|旅行|户外|风景|花园/u.test(text)) return 'nature';
+  if (/商业|经营|创业|产品|市场|品牌|销售|客户|收入|成本|生意/u.test(text)) return 'business';
+  if (/教育|教学|课程|学习|课堂|学校|老师|知识|阅读/u.test(text)) return 'learning';
+  if (/成长|改变|习惯|能力|人生|心理|关系|行动|实践|工作/u.test(text)) return 'growth';
+  return 'general';
+}
+
+function renderThemeMotif(theme, palette) {
+  const stroke = `stroke="${palette.accent}"`;
+  const inkStroke = `stroke="${palette.ink}"`;
+  const motifs = {
+    minimal: `<g fill="none" ${stroke} opacity=".34"><circle cx="756" cy="142" r="92" stroke-width="2"/><circle cx="756" cy="142" r="62" stroke-width="2"/><path d="M630 258h208M670 278h168" stroke-width="2"/></g>`,
+    editorial: `<g fill="none" ${inkStroke} opacity=".28"><rect x="610" y="52" width="232" height="278" rx="4" stroke-width="2"/><path d="M634 80h142M634 91h92M634 300h174" stroke-width="5"/><path d="M798 78v202" stroke-width="2"/></g>`,
+    fresh: `<g fill="${palette.soft}" opacity=".42"><path d="M650 292c-40-74-6-165 91-208 2 89-20 166-91 208Z"/><path d="M711 306c-4-73 43-137 127-162-10 82-53 142-127 162Z"/><path d="M681 304c23-61 54-112 94-158" fill="none" ${stroke} stroke-width="4"/></g>`,
+    ink: `<g fill="none" ${stroke} opacity=".38"><path d="M616 260c36-122 113-168 221-167-67 34-100 84-112 154-10 59-45 83-109 70 44-21 62-50 65-92" stroke-width="9" stroke-linecap="round"/><circle cx="814" cy="284" r="16" fill="${palette.accent}" stroke="none"/><circle cx="644" cy="88" r="8" fill="${palette.accent}" stroke="none"/></g>`,
+    sunset: `<g><circle cx="754" cy="136" r="70" fill="${palette.accent}" opacity=".22"/><path d="M570 253 680 177l69 55 92-102 107 123" fill="none" ${stroke} stroke-width="5" opacity=".52"/><path d="M577 286h300M621 306h240" ${stroke} stroke-width="3" opacity=".28"/></g>`,
+    official: `<g fill="none" ${stroke} opacity=".38"><rect x="620" y="66" width="224" height="222" rx="18" stroke-width="3"/><path d="M650 112h164M650 144h112M650 176h145" stroke-width="8" stroke-linecap="round"/><circle cx="793" cy="232" r="28" fill="${palette.accent}" opacity=".25" stroke-width="2"/></g>`
+  };
+  return motifs[theme] || motifs.minimal;
+}
+
+function renderTopicMotif(topic, palette) {
+  const accent = palette.accent;
+  const ink = palette.ink;
+  const motifs = {
+    technology: `<g fill="none" stroke="${accent}" stroke-width="4" opacity=".48"><path d="M650 166 730 112l82 48-68 93-94-25 0-62Z"/><circle cx="650" cy="166" r="11" fill="${accent}"/><circle cx="730" cy="112" r="11" fill="${accent}"/><circle cx="812" cy="160" r="11" fill="${accent}"/><circle cx="744" cy="253" r="11" fill="${accent}"/><circle cx="650" cy="228" r="11" fill="${accent}"/></g>`,
+    nature: `<g fill="none" stroke="${accent}" stroke-width="5" opacity=".46"><path d="M634 284c47-76 89-132 171-190M690 221c-35-44-51-76-51-112 43 19 70 49 82 92M747 166c25-45 57-66 101-70-8 46-34 78-81 94"/><path d="M625 298h236" stroke-width="3"/></g>`,
+    business: `<g fill="${accent}" opacity=".3"><rect x="630" y="218" width="38" height="72" rx="6"/><rect x="691" y="178" width="38" height="112" rx="6"/><rect x="752" y="132" width="38" height="158" rx="6"/><rect x="813" y="92" width="38" height="198" rx="6"/></g><path d="m634 196 77-47 60-16 77-57" fill="none" stroke="${ink}" stroke-width="5" opacity=".55"/>`,
+    learning: `<g fill="none" stroke="${accent}" stroke-width="5" opacity=".5"><path d="M626 132c50-17 94-8 126 25v144c-37-30-80-38-126-23V132ZM752 157c35-31 78-40 128-25v146c-46-15-89-7-128 23V157Z"/><path d="M650 174h48M650 198h56M777 174h72M777 198h58" stroke-width="4"/></g>`,
+    growth: `<g fill="${accent}" opacity=".34"><path d="M622 286h50v-44h48v-48h48v-48h48v-48h48v188H622Z"/></g><path d="M650 244c34-42 63-63 101-77 30-11 49-32 62-64m-80 98c-4-40 7-66 34-86m8 54c29-4 48-18 61-44" fill="none" stroke="${ink}" stroke-width="5" stroke-linecap="round" opacity=".52"/>`,
+    general: `<g fill="none" stroke="${accent}" stroke-width="4" opacity=".4"><circle cx="746" cy="174" r="105"/><path d="M641 174h210M746 69v210M672 100l148 148m0-148L672 248"/><circle cx="746" cy="174" r="43" fill="${palette.soft}" opacity=".55"/></g>`
+  };
+  return motifs[topic] || motifs.general;
+}
+
 export function renderCreativeSvg({ title = '', subtitle = '', keywords = [], theme = 'minimal', colorPalette = 'default', role = 'section', index = 0 } = {}) {
   const palette = colorPalette === 'ral-inspired' ? PALETTES.ralInspired : paletteFor(theme);
-  const main = escapeXml(truncate(title || '一段值得分享的真实体验', role === 'cover' ? WECHAT_LIMITS.titleImage.mainChars : 22));
-  const sub = escapeXml(truncate(subtitle || keywords.slice(0, 3).join(' · '), role === 'cover' ? WECHAT_LIMITS.titleImage.subChars : 30));
-  const chips = keywords.slice(0, 3).map((keyword, chipIndex) => `<text x="${56 + chipIndex * 142}" y="326" font-size="16" fill="${palette.ink}" opacity=".72">${escapeXml(truncate(keyword, 8))}</text>`).join('');
-  const badge = role === 'cover' ? 'DRAFTLOOM · TITLE VISUAL' : role === 'theme' ? `THEME ${String(index + 1).padStart(2, '0')}` : `SECTION ${String(index + 1).padStart(2, '0')}`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${role === 'cover' ? 383 : 506}" viewBox="0 0 900 ${role === 'cover' ? 383 : 506}">
+  const visualTheme = PALETTES[theme] ? theme : 'minimal';
+  const visualTopic = inferVisualTopic(title, keywords);
+  const isCover = role === 'cover';
+  const rawTitle = clean(title) || '一段值得分享的真实体验';
+  const mainText = isCover ? truncate(rawTitle, WECHAT_LIMITS.titleImage.mainChars) : rawTitle;
+  const suppliedSubtitle = clean(subtitle);
+  const boilerplateSubtitle = /^(?:文章语义场景图|根据文章核心内容生成|自动排版草稿|未命名主题)$/;
+  const subText = isCover
+    ? truncate(suppliedSubtitle || keywords.slice(0, 2).join(' · '), WECHAT_LIMITS.titleImage.subChars)
+    : (suppliedSubtitle && !boilerplateSubtitle.test(suppliedSubtitle) ? suppliedSubtitle : keywords.slice(0, 2).join(' · '));
+  const mainFont = isCover ? 48 : 50;
+  const subFont = isCover ? 30 : 30;
+  const maxTextWidth = 792;
+  const wrapLines = (value, fontSize) => {
+    const lines = [];
+    let line = '';
+    let width = 0;
+    for (const character of [...String(value || '')]) {
+      if (character === '\n') {
+        if (line) lines.push(line);
+        line = '';
+        width = 0;
+        continue;
+      }
+      const charWidth = /[\u2e80-\u9fff\uff00-\uffef]/.test(character) ? 1 : /\s/.test(character) ? 0.34 : /[.,:;!?，。！？；：、]/.test(character) ? 0.5 : 0.62;
+      if (line && width + charWidth * fontSize > maxTextWidth) {
+        lines.push(line);
+        line = '';
+        width = 0;
+      }
+      line += character;
+      width += charWidth * fontSize;
+    }
+    if (line) lines.push(line);
+    return lines;
+  };
+  const mainLines = wrapLines(mainText, mainFont);
+  const subLines = wrapLines(subText, subFont);
+  const lineSpans = (lines, lineHeight) => lines.map((line, lineIndex) => `<tspan x="54"${lineIndex ? ` dy="${lineHeight}"` : ''}>${escapeXml(line)}</tspan>`).join('');
+  const mainLineHeight = Math.round(mainFont * 1.22);
+  const subLineHeight = Math.round(subFont * 1.3);
+  const mainY = isCover ? 168 : 190;
+  const subY = mainY + Math.max(1, mainLines.length) * mainLineHeight + (isCover ? 24 : 30);
+  const subHeight = subLines.length * subLineHeight;
+  const height = isCover ? 383 : Math.max(506, subY + subHeight + 82);
+  const accentY = Math.min(height - 28, subY + subHeight + 26);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${height}" viewBox="0 0 900 ${height}" data-theme="${visualTheme}" data-topic="${visualTopic}">
   <defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="${palette.bg}"/><stop offset="1" stop-color="${palette.soft}"/></linearGradient></defs>
-  <rect width="900" height="100%" fill="url(#g)"/><circle cx="760" cy="108" r="148" fill="${palette.accent}" opacity=".16"/><circle cx="814" cy="168" r="88" fill="${palette.accent}" opacity=".12"/><path d="M0 402 C180 332 276 468 448 388 S720 330 900 422 V506 H0Z" fill="${palette.accent}" opacity=".12"/>
-  <rect x="54" y="48" width="278" height="30" rx="15" fill="${palette.ink}" opacity=".1"/><text x="72" y="69" font-size="14" letter-spacing="2" fill="${palette.ink}" opacity=".7">${badge}</text>
-  <text x="54" y="183" font-size="42" font-weight="700" fill="${palette.ink}">${main}</text><text x="54" y="230" font-size="20" fill="${palette.ink}" opacity=".76">${sub}</text>${chips}
-  <path d="M54 ${role === 'cover' ? 284 : 382} H210" stroke="${palette.accent}" stroke-width="6" stroke-linecap="round"/><text x="54" y="${role === 'cover' ? 350 : 448}" font-size="14" fill="${palette.ink}" opacity=".58">由 Draftloom 根据文章语义生成 · 人工可替换</text>
+  <rect width="900" height="100%" fill="url(#g)"/><path d="M0 ${Math.max(360, height - 110)} C180 ${Math.max(300, height - 190)} 276 ${height - 40} 448 ${Math.max(350, height - 130)} S720 ${Math.max(300, height - 200)} 900 ${Math.max(360, height - 110)} V${height} H0Z" fill="${palette.accent}" opacity=".08"/><g data-art-style="${visualTheme}">${renderThemeMotif(visualTheme, palette)}</g><g data-art-topic="${visualTopic}">${renderTopicMotif(visualTopic, palette)}</g>
+  <text x="54" y="${mainY}" font-size="${mainFont}" font-weight="700" fill="${palette.ink}">${lineSpans(mainLines, mainLineHeight)}</text>${subLines.length ? `<text x="54" y="${subY}" font-size="${subFont}" fill="${palette.ink}" opacity=".82">${lineSpans(subLines, subLineHeight)}</text>` : ''}
+  <path d="M54 ${accentY} H250" stroke="${palette.accent}" stroke-width="7" stroke-linecap="round"/>
   </svg>`;
 }
 
@@ -710,13 +829,14 @@ export function createCreativeAsset({ title, subtitle, keywords = [], theme = 'm
   const safeTitle = clean(title) || '未命名主题';
   const svg = renderCreativeSvg({ title: safeTitle, subtitle, keywords, theme, colorPalette, role, index });
   const dataUrl = svgDataUrl(svg);
+  const height = Number(svg.match(/\bheight="(\d+)"/)?.[1]) || (role === 'cover' ? 383 : 506);
   return {
     id: id || randomId(),
     name: role === 'cover' ? 'draftloom-title-cover.svg' : role === 'theme' ? `draftloom-theme-${index + 1}.svg` : `draftloom-section-${index + 1}.svg`,
     type: 'image/svg+xml',
     size: dataUrl.length,
     width: 900,
-    height: role === 'cover' ? 383 : 506,
+    height,
     dataUrl,
     alt: role === 'cover' ? `${safeTitle} 标题封面` : role === 'theme' ? `${safeTitle} 主题图` : `${safeTitle} 场景图`,
     ...(role === 'cover' ? { coverMain: truncate(safeTitle, WECHAT_LIMITS.titleImage.mainChars), coverSub: truncate(subtitle || keywords.slice(0, 3).join(' · '), WECHAT_LIMITS.titleImage.subChars) } : {}),
@@ -748,7 +868,7 @@ export function autoComposeDocument(input = {}, { generate = true, maxGenerated 
     ? generateViralTitlePlan({ text: currentBody, filename: next.meta?.importedFrom || '', currentTitle: next.title, keywords: coreContent.keywords, profile: titleProfile })
     : null;
   const canAutoSetTitle = forceTitle === true || next.meta?.titleLocked !== true;
-  const titleInfo = titlePlan && canAutoSetTitle
+  const titleInfo = titlePlan?.selected && canAutoSetTitle
     ? { title: titlePlan.selected, confidence: 0.86, source: 'viral', mode: 'viral' }
     : deriveArticleTitle({ text: source, filename: next.meta?.importedFrom || '', currentTitle: next.title });
   const preserveHumanSummary = next.meta?.subtitleLocked === true || next.meta?.subtitleSource === 'human';

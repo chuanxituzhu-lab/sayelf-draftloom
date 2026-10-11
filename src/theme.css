@@ -19,8 +19,8 @@
 .shell .wechat-article h3{border-left-color:var(--theme-accent)}
 .shell .wechat-article .cta a{background:var(--theme-accent)}
 .shell .wechat-article blockquote,.shell .wechat-article .cta,.shell .wechat-article .media{background:var(--theme-soft)}
-.shell .wechat-cover{position:relative;overflow:hidden;margin:-28px -22px 20px;min-height:112px;border-radius:0 0 8px 8px;background:var(--theme-soft)}
-.shell .wechat-cover:not(.wechat-cover-placeholder) img{display:block;width:100%;aspect-ratio:900 / 383;object-fit:cover}
+.shell .wechat-cover{position:relative;box-sizing:border-box;width:100%;max-width:100%;overflow:hidden;margin:0 auto 20px;min-height:112px;border-radius:8px;background:var(--theme-soft)}
+.shell .wechat-cover:not(.wechat-cover-placeholder) > img{display:block;width:100%;max-width:100%;aspect-ratio:900 / 383;object-fit:contain;object-position:center center;margin:0 auto}
 .shell .wechat-cover-copy-overlay{position:absolute;inset:0;pointer-events:none}
 .shell .wechat-cover-copy-overlay img{display:block;width:100%;height:100%;object-fit:fill}
 .shell .wechat-cover-placeholder{display:grid;place-items:center;padding:20px;color:var(--theme-accent);font-size:12px;border:1px dashed color-mix(in srgb,var(--theme-accent) 50%,var(--theme-line));text-align:center}

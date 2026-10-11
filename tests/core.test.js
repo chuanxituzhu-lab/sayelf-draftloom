@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, humanizeText, renderDocumentBody, renderArticleHtml, THEMES, normalizeTheme, autoFormatDocument, getWechatLayoutProfile, withCoverPreviewDraft } from '../src/core.js';
+import { readFile } from 'node:fs/promises';
+import { createInitialDocument, parseCommand, reduceDocument, VersionStore, importArticle, getLayoutGuidance, generateLayoutGuidance, humanizeText, renderDocumentBody, renderArticleHtml, renderArticlePreview, THEMES, normalizeTheme, autoFormatDocument, getWechatLayoutProfile, getWechatLayoutVariables, withCoverPreviewDraft } from '../src/core.js';
 import { inspectWechatArticle } from '../src/wechat-limits.js';
 
 test('parseCommand handles title and content commands', () => {
@@ -10,6 +11,24 @@ test('parseCommand handles title and content commands', () => {
   assert.deepEqual(parseCommand('一键优化排版'), { type:'autoFormat' });
   assert.equal(parseCommand('生成爆款标题').includeCover, false);
   assert.deepEqual(parseCommand('上移当前'), { type:'moveSelected', direction:-1 });
+});
+
+test('本地三维主题图作为 PNG 素材原子插入到当前段落之后', () => {
+  const doc = { ...createInitialDocument(), assets: [], blocks: [
+    { id: 'section', type: 'heading', text: '核心观点' },
+    { id: 'paragraph', type: 'paragraph', text: '先选择一个落地场景。' },
+    { id: 'next', type: 'heading', text: '下一节' }
+  ] };
+  const asset = { id: 'local-three-test', name: '主题图.png', type: 'image/png', dataUrl: 'data:image/png;base64,AA==', width: 900, height: 506, generated: true, source: 'draftloom:three-local' };
+  const result = reduceDocument(doc, { type: 'insertGeneratedAsset', asset, afterId: 'paragraph' }, 'paragraph');
+  assert.equal(result.changed, true);
+  assert.equal(result.doc.assets.at(-1).source, 'draftloom:three-local');
+  assert.equal(result.doc.blocks[2].assetId, asset.id);
+  assert.equal(result.doc.blocks[2].source, 'draftloom:three-local');
+  assert.equal(result.doc.blocks[3].id, 'next');
+  const cover = reduceDocument(doc, { type: 'insertGeneratedAsset', asset: { ...asset, id: 'bad-svg', dataUrl: 'data:image/svg+xml;base64,AA==' } }, 'paragraph');
+  assert.equal(cover.changed, false);
+  assert.match(cover.error, /PNG/);
 });
 
 test('爆款标题只更新文章标题，不进入封面文案或封面图', () => {
@@ -48,6 +67,33 @@ test('reduceDocument updates title without mutating source', () => {
   const result = reduceDocument(doc, {type:'setTitle', text:'A'});
   assert.equal(result.doc.title, 'A');
   assert.notEqual(doc.title, 'A');
+});
+
+test('标题字号在预览与微信 HTML 中一致，并在自动排版和切换主题后保留', () => {
+  const doc = { ...createInitialDocument(), title: '可调节字号的标题' };
+  assert.equal(getWechatLayoutProfile(doc).titleFontSize, 26);
+
+  const selected = reduceDocument(doc, { type: 'setTitleFontSize', fontSize: 30 });
+  assert.equal(selected.changed, true);
+  assert.equal(selected.doc.meta.titleFontSize, 30);
+  assert.equal(doc.meta.titleFontSize, undefined);
+  assert.match(getWechatLayoutVariables(selected.doc), /--wechat-title-size:30px/);
+  assert.match(renderArticleHtml(selected.doc), /<h1 style="[^"]*font-size:30px/);
+
+  const formatted = reduceDocument(selected.doc, { type: 'autoFormat' });
+  const themed = reduceDocument(formatted.doc, { type: 'setTheme', theme: 'official' });
+  assert.equal(getWechatLayoutProfile(themed.doc).titleFontSize, 30);
+  assert.match(renderArticleHtml(themed.doc), /<h1 style="[^"]*font-size:30px/);
+  assert.equal(reduceDocument(themed.doc, { type: 'setTitleFontSize', fontSize: 30 }).changed, false);
+  assert.equal(reduceDocument(themed.doc, { type: 'setTitleFontSize', fontSize: 99 }).changed, false);
+});
+
+test('标题字号选择器提供明确选项并绑定文章字号设置', async () => {
+  const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(app, /id="titleFontSizeSelect" aria-label="标题字号"/);
+  assert.match(app, /type:'setTitleFontSize',fontSize:Number\(e\.target\.value\)/);
+  assert.match(css, /\.wechat-article h1\{font-size:var\(--wechat-title-size,26px\)/);
 });
 
 test('selected block can be moved and deleted', () => {
@@ -204,6 +250,61 @@ test('封面字段实时预览覆盖在封面图上，发布 HTML 不在封面�
   assert.doesNotMatch(preview, /<figcaption class="wechat-cover-copy"/);
   assert.doesNotMatch(html, /当前主文案|当前副文案|<figcaption[^>]*>[^<]*<strong/);
   assert.match(html, /data-wechat-cover="true"/);
+  const coverFigureStyle = html.match(/<figure style="([^"]*)" data-wechat-cover="true"/)?.[1] || '';
+  const coverImageStyle = html.match(/<figure style="[^"]*" data-wechat-cover="true"><img style="([^"]*)"/)?.[1] || '';
+  assert.match(coverFigureStyle, /width:100%;max-width:100%;box-sizing:border-box;margin:0 auto 24px/);
+  assert.doesNotMatch(coverFigureStyle, /margin:-/);
+  assert.match(coverImageStyle, /display:block;width:100%;max-width:100%;height:auto;margin:0 auto;object-fit:contain;object-position:center center/);
+});
+
+test('WebUI 封面预览与导出一致：在正文列内居中且不再负边距通栏', async () => {
+  const css = await readFile(new URL('../src/theme.css', import.meta.url), 'utf8');
+  const coverRule = css.match(/\.shell \.wechat-cover\s*\{([^}]*)\}/)?.[1] || '';
+  const coverImageRule = css.match(/\.shell \.wechat-cover:not\(\.wechat-cover-placeholder\)\s*>\s*img\s*\{([^}]*)\}/)?.[1] || '';
+  assert.match(coverRule, /width:100%/);
+  assert.match(coverRule, /margin:0 auto 20px/);
+  assert.doesNotMatch(coverRule, /margin:-/);
+  assert.match(coverImageRule, /object-fit:contain/);
+  assert.match(coverImageRule, /object-position:center center/);
+  assert.match(coverImageRule, /margin:0 auto/);
+});
+
+test('预览和微信 HTML 自动省略开头重复标题及复述摘要的短段落，但不删原稿', () => {
+  const title = '欢迎来到 SAYELF 背后藏着一个被忽略的规律';
+  const titleEcho = '原来，欢迎来到 SAYELF 背后藏着一个被忽略的规律';
+  const summaryEcho = 'SAYELF 山野精灵探索 AI · 创造工具 · 重构工作与生活';
+  const doc = {
+    ...createInitialDocument(),
+    title,
+    subtitle: 'SAYELF 山野精灵，探索 AI、Agent、自动化工作流与数字工具创造。从认识 AI 到创造自己的工具，用真实实践，让技术成为每个人的创造力。',
+    blocks: [
+      { id: 'echo-title', type: 'heading', level: 2, text: titleEcho },
+      { id: 'echo-summary', type: 'paragraph', text: summaryEcho },
+      { id: 'real-opening', type: 'paragraph', text: '文章接下来会讲清楚具体经历、方法和判断依据。' },
+      { id: 'real-heading', type: 'heading', level: 2, text: '01 先说结论' }
+    ]
+  };
+  const preview = renderDocumentBody(doc);
+  const html = renderArticleHtml(doc);
+  for (const output of [preview, html]) {
+    const visibleText = output.replace(/<[^>]*>/g, '');
+    assert.doesNotMatch(output, /原来，欢迎来到 SAYELF/);
+    assert.doesNotMatch(visibleText, /SAYELF 山野精灵探索 AI · 创造工具/);
+    assert.match(visibleText, /文章接下来会讲清楚具体经历/);
+    assert.match(visibleText, /01 先说结论/);
+  }
+  assert.equal(doc.blocks.length, 4);
+  assert.equal(doc.blocks[0].text, titleEcho);
+  assert.equal(doc.blocks[1].text, summaryEcho);
+
+  const standaloneSummaryEcho = renderArticleHtml({
+    ...doc,
+    blocks: [
+      { id: 'unrelated-heading', type: 'heading', level: 2, text: '第一章：文章背景' },
+      { id: 'kept-summary-like-paragraph', type: 'paragraph', text: summaryEcho }
+    ]
+  });
+  assert.match(standaloneSummaryEcho.replace(/<[^>]*>/g, ''), /SAYELF 山野精灵探索 AI · 创造工具/);
 });
 
 test('manual cover fields remain independent across optimization and cover replacement', () => {
@@ -324,7 +425,8 @@ test('微信 HTML keeps many short paragraphs below the API character limit with
   const validation = inspectWechatArticle({ title: article.title, digest: article.subtitle, content: html });
   assert.equal(blocks.reduce((sum, block) => sum + [...block.text].length, 0) < 20_000, true);
   assert.equal(validation.ok, true);
-  assert.ok(blocks.every(block => html.includes(block.text)));
+  const visibleText = html.replace(/<[^>]*>/g, '');
+  assert.ok(blocks.every(block => visibleText.includes(block.text)));
   assert.match(html, /font-family:/);
   assert.match(html, /line-height:/);
 });
@@ -617,4 +719,24 @@ test('微信排版对图片居中自适应并避免重复长图注', () => {
   assert.match(html, /overflow-wrap:anywhere/);
   assert.match(html, /font-family:/);
   assert.match(renderArticleHtml({ ...doc, blocks: [{ id: 'subheading', type: 'heading', level: 3, text: '归来的意义' }] }), /<h3 style=/);
+});
+
+test('微信实时预览直接复用发布 HTML 的完整 article 片段', async () => {
+  const doc = {
+    ...createInitialDocument(),
+    title: '实时预览与发布一致',
+    subtitle: '预览复用最终发布片段。',
+    theme: 'official',
+    blocks: [
+      { id: 'opening', type: 'paragraph', text: '这是一篇没有显式重点词的普通文章。读者需要一眼看见核心结论，才能快速理解内容。' },
+      { id: 'section', type: 'heading', level: 2, text: '01 核心结论' }
+    ]
+  };
+  const html = renderArticleHtml(doc);
+  const article = html.slice(html.indexOf('<article class="wechat-article"'), html.lastIndexOf('</article>') + '</article>'.length);
+  assert.equal(renderArticlePreview(doc), article);
+  assert.match(article, /<span style="background:rgba\(25,216,117,\.16\);color:#19d875/);
+  const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.wechat-preview-scale>\.wechat-article\{min-height:0!important;border:0!important;box-shadow:none!important/);
+  assert.match(css, /\.wechat-preview-scale>\.wechat-article p\{font-size:inherit!important;color:inherit!important;line-height:inherit!important;text-align:inherit!important\}/);
 });

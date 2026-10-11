@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoComposeDocument, deriveArticleTitle, deriveImageBudget, evaluateHotTopicFit, extractCoreContent, extractKeywords, generateArticleKeywords, generateViralTitlePlan, normalizeCoreContent, planVisualLayout, recognizeAssetContent, renderCreativeSvg, validateCoreContent } from '../src/visuals.js';
+import { autoComposeDocument, createCreativeAsset, deriveArticleTitle, deriveImageBudget, evaluateHotTopicFit, extractCoreContent, extractKeywords, generateArticleKeywords, generateViralTitlePlan, normalizeCoreContent, planVisualLayout, recognizeAssetContent, renderCreativeSvg, validateCoreContent } from '../src/visuals.js';
 import { importArticle, parseCommand } from '../src/core.js';
+import { classifyArticleVisual } from '../src/three-visuals.js';
+
+test('Three.js 视觉主题由文章实际语义选择，而不是随机套图', () => {
+  assert.equal(classifyArticleVisual('AI 与数据工具改变了工作方式'), 'technology');
+  assert.equal(classifyArticleVisual('山野森林里的植物生态'), 'nature');
+  assert.equal(classifyArticleVisual('团队工作流程和创业实践'), 'work');
+  assert.equal(classifyArticleVisual('一个关于友谊的故事'), 'general');
+});
 
 test('natural language command exposes smart visual composition', () => {
   assert.deepEqual(parseCommand('智能配图'), { type: 'autoComposeVisuals', generate: true, maxGenerated: 3, autoImageCount: true, titleMode: 'viral' });
@@ -24,17 +32,34 @@ test('title candidates lead with the core conclusion and show exact body evidenc
   });
   assert.equal(plan.mode, 'viral');
   assert.equal(plan.strategy, 'conclusion-first-hook');
-  assert.equal(plan.candidates[0].title, '真正决定工作质量的，是清晰的目标和人的判断');
+  assert.equal(plan.candidates[0].title, '清晰目标和判断决定工作质量');
   assert.equal(plan.candidates[0].evidence.sentence, '真正决定工作质量的，是清晰的目标和人的判断。');
   assert.equal(plan.candidates[0].evidence.sentenceIndex, 0);
   assert.match(plan.candidates[0].rationale, /结论先行/);
   assert.equal(Object.hasOwn(plan.candidates[0], 'score'), false);
   assert.ok(plan.candidates.length >= 2);
-  assert.ok(plan.candidates.every(item => [...item.title].length <= 32));
+  assert.ok(plan.candidates.every(item => [...item.title].length <= 16));
   assert.ok(plan.candidates.every(item => item.evidence?.sentence));
   assert.ok(plan.candidates.every(item => !item.title.includes('无关热搜词')));
   assert.equal(plan.selected, plan.candidates[0].title);
   assert.match(plan.note, /不预测阅读量/);
+});
+
+test('core title evidence becomes a complete sentence of at most 16 characters', () => {
+  const conclusion = generateViralTitlePlan({ text: '真正决定工作质量的，是清晰的目标和人的判断。' });
+  assert.equal(conclusion.candidates[0].title, '清晰目标和判断决定工作质量');
+  assert.equal(conclusion.candidates[0].evidence.sentence, '真正决定工作质量的，是清晰的目标和人的判断。');
+
+  const contrast = generateViralTitlePlan({ text: 'AI工具越来越多，真正解决问题的却未必越来越多。' });
+  assert.equal(contrast.candidates[0].title, 'AI工具越多，解决问题未必越多');
+  assert.equal(contrast.candidates[0].evidence.sentence, 'AI工具越来越多，真正解决问题的却未必越来越多。');
+  assert.ok([...conclusion.candidates[0].title].length <= 16);
+  assert.ok([...contrast.candidates[0].title].length <= 16);
+  assert.ok(!conclusion.candidates[0].title.endsWith('…'));
+  assert.ok(!contrast.candidates[0].title.endsWith('…'));
+  const fragmented = generateViralTitlePlan({ text: '关于新工具的讨论在这篇文章里有很多，读者可以自行思考。' });
+  assert.deepEqual(fragmented.candidates, []);
+  assert.equal(fragmented.selected, '');
 });
 
 test('title generator fails closed when the article has no evidence-bearing body sentence', () => {
@@ -231,7 +256,8 @@ test('viral composition applies a title plan but respects a human-locked title',
   const input = importArticle({ text: '# 原始标题\n\n一段关于山野茶和自然生活的真实记录。' });
   const viral = autoComposeDocument(input, { generate: false, titleMode: 'viral', forceTitle: true });
   assert.equal(viral.meta.titlePlan.mode, 'viral');
-  assert.equal(viral.title, viral.meta.titlePlan.selected);
+  assert.equal(viral.meta.titlePlan.selected, '');
+  assert.equal(viral.title, '原始标题');
   const locked = autoComposeDocument({ ...viral, meta: { ...viral.meta, titleLocked: true }, title: '人工确认标题' }, { generate: false, titleMode: 'viral' });
   assert.equal(locked.title, '人工确认标题');
   assert.equal(locked.meta.titlePlan.applied, false);
@@ -280,8 +306,47 @@ test('re-running visual composition does not duplicate generated assets or block
   assert.equal(rerun.blocks.length, beforeBlocks);
 });
 
-test('creative SVG includes human-readable title and review boundary', () => {
+test('creative SVG keeps the cover headline and does not add a microcopy footer', () => {
   const svg = renderCreativeSvg({ title: '山野茶', subtitle: '自然生活', keywords: ['茶', '山野'], role: 'cover' });
   assert.match(svg, /山野茶/);
-  assert.match(svg, /人工可替换/);
+  assert.doesNotMatch(svg, /由 Draftloom 根据文章语义生成/);
+});
+
+test('local SVG artwork changes composition by both article topic and selected theme', () => {
+  const themes = ['minimal', 'editorial', 'fresh', 'ink', 'sunset', 'official'];
+  const styleSignatures = themes.map(theme => renderCreativeSvg({
+    title: 'AI工具如何提升工作效率', keywords: ['AI', '自动化'], theme, colorPalette: 'ral-inspired', role: 'cover'
+  })
+    .replace(/#[0-9a-f]{3,8}/gi, '')
+    .replace(/data-(?:theme|topic|art-style|art-topic)="[^"]*"/g, ''));
+  assert.equal(new Set(styleSignatures).size, themes.length, 'each theme must change SVG structure, not only its palette');
+
+  const technology = renderCreativeSvg({ title: 'AI工具如何提升工作效率', keywords: ['AI', '自动化'], theme: 'minimal' });
+  const nature = renderCreativeSvg({ title: '山野茶园里的自然观察', keywords: ['森林', '植物'], theme: 'minimal' });
+  assert.match(technology, /data-topic="technology"/);
+  assert.match(nature, /data-topic="nature"/);
+  assert.notEqual(
+    technology.replace(/#[0-9a-f]{3,8}/gi, '').replace(/data-(?:theme|topic|art-style|art-topic)="[^"]*"/g, ''),
+    nature.replace(/#[0-9a-f]{3,8}/gi, '').replace(/data-(?:theme|topic|art-style|art-topic)="[^"]*"/g, ''),
+    'topic motifs must reflect article meaning even when the selected style is the same'
+  );
+});
+
+test('section visual wraps the full heading and keeps all visible type readable', () => {
+  const title = '五、从创造工具，到经营结果这也让我重新思考';
+  const svg = renderCreativeSvg({ title, subtitle: '文章语义场景图', keywords: ['经营结果', '创造工具'], role: 'section' });
+  const main = svg.match(/font-size="50"[^>]*>([\s\S]*?)<\/text>/)?.[1] || '';
+  const visibleTitle = main.replace(/<\/?tspan[^>]*>/g, '');
+  assert.equal(visibleTitle, title);
+  assert.doesNotMatch(main, /…/);
+  const fontSizes = [...svg.matchAll(/font-size="(\d+)"/g)].map(([, size]) => Number(size));
+  assert.ok(fontSizes.every(size => size >= 28));
+});
+
+test('long section art expands its canvas and reports the matching asset height', () => {
+  const asset = createCreativeAsset({ title: '长标题'.repeat(24), role: 'section' });
+  const svg = decodeURIComponent(asset.dataUrl.split(',')[1]);
+  const svgHeight = Number(svg.match(/\bheight="(\d+)"/)?.[1]);
+  assert.ok(svgHeight > 506);
+  assert.equal(asset.height, svgHeight);
 });

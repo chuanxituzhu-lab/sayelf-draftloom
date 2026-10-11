@@ -2,15 +2,19 @@ import http from 'node:http';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { extname, join } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyProtectedLocalConfig } from './scripts/local-config.mjs';
 import { searchTechTopics } from './scripts/tech-topic-search.mjs';
 import { extractLocalDocument, MAX_DOCUMENT_BYTES } from './scripts/document-extract.mjs';
 import { normalizeQrAuthUrl, qrDataUrlForAuthUrl } from './src/qr-auth.js';
 import { readProtectedAuth, saveProtectedAuth } from './scripts/local-auth.mjs';
+import { assertWechatApiEndpoint, resolveWechatAccessToken, fetchWechatDraftPage, redactWechatToken } from './scripts/wechat-api.mjs';
+import { describeWechatError } from './src/wechat-response.js';
+import { archiveSubmittedArticle, archiveSyncedDraft, deleteArticleLibraryEntry, getArticleLibraryEntry, listArticleLibrary } from './src/article-library.js';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
+const storageRoot = process.env.DRAFTLOOM_STORAGE_ROOT || root;
 applyProtectedLocalConfig(root);
 const port = Number(process.env.PORT || 4173);
 const types = {
@@ -44,7 +48,8 @@ function publicFilePath(raw) {
   const allowed = rel === 'index.html'
     || /^src\/[a-z0-9-]+\.(?:js|css)$/i.test(rel)
     || /^assets\/[a-z0-9-]+\.(?:png|svg)$/i.test(rel)
-    || /^node_modules\/gsap\/[a-z0-9-]+\.js$/i.test(rel);
+    || /^node_modules\/gsap\/[a-z0-9-]+\.js$/i.test(rel)
+    || ['node_modules/three/build/three.module.js', 'node_modules/three/build/three.core.js'].includes(rel);
   return allowed ? join(root, rel) : null;
 }
 
@@ -193,6 +198,54 @@ async function publishGuiDocument(doc, confirm = false) {
   }
 }
 
+async function syncWechatDraftLibrary({ confirm, maxPages = 20, offset: requestedOffset = 0 } = {}) {
+  if (confirm !== true) throw new Error('同步公众号草稿前必须显式确认');
+  const token = await resolveWechatAccessToken({ root, env: process.env });
+  if (!token) throw new Error('本机没有可用的公众号授权或接口凭据');
+  const endpoint = process.env.WECHAT_DRAFT_LIST_API_URL || 'https://api.weixin.qq.com/cgi-bin/draft/batchget';
+  const pages = Math.min(50, Math.max(1, Number(maxPages) || 20));
+  let offset = Math.max(0, Math.floor(Number(requestedOffset) || 0));
+  const startOffset = offset;
+  let totalCount = Infinity;
+  let imported = 0;
+  let seen = 0;
+  let emptyPage = false;
+  for (let page = 0; page < pages && offset < totalCount; page += 1) {
+    const result = await fetchWechatDraftPage({ token, offset, count: 20, endpoint });
+    const items = Array.isArray(result.item) ? result.item : [];
+    totalCount = Number.isFinite(Number(result.total_count)) ? Number(result.total_count) : offset + items.length;
+    if (!items.length) { emptyPage = true; break; }
+    for (const item of items) {
+      const mediaId = String(item?.media_id || '').trim();
+      if (!mediaId) continue;
+      let content = item.content;
+      if (!Array.isArray(content?.news_item) || !content.news_item.length) {
+        const detailUrl = assertWechatApiEndpoint(process.env.WECHAT_DRAFT_GET_API_URL || 'https://api.weixin.qq.com/cgi-bin/draft/get');
+        detailUrl.searchParams.set('access_token', token);
+        let response;
+        try { response = await fetch(detailUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ media_id: mediaId }), signal: AbortSignal.timeout(30_000) }); }
+        catch (error) { throw new Error(`读取公众号草稿「${mediaId}」失败：无法连接微信接口${error?.cause?.code ? `（网络错误 ${error.cause.code}）` : ''}`); }
+        const detail = await response.json();
+        if (!response.ok || Number(detail.errcode || 0) !== 0) {
+          const detailError = describeWechatError(detail) || String(response.status);
+          throw new Error(`读取公众号草稿「${mediaId}」失败：${redactWechatToken(detailError, token)}`);
+        }
+        content = detail.content;
+      }
+      const articles = Array.isArray(content?.news_item) ? content.news_item : [];
+      for (let index = 0; index < articles.length; index += 1) {
+        const entry = await archiveSyncedDraft(storageRoot, item, articles[index], index);
+        if (entry?.created) imported += 1;
+        if (entry) seen += 1;
+      }
+    }
+    offset += items.length;
+    if (items.length < 20) { emptyPage = true; break; }
+  }
+  const complete = emptyPage || offset >= totalCount;
+  return { imported, seen, pages: Math.ceil((offset - startOffset) / 20), totalCount: Number.isFinite(totalCount) ? totalCount : seen, complete, nextOffset: complete ? 0 : offset };
+}
+
 let guiPublishInFlight = false;
 
 const server = http.createServer(async (req, res) => {
@@ -201,6 +254,21 @@ const server = http.createServer(async (req, res) => {
     const raw = decodeURIComponent((req.url || '/').split('?')[0]);
     if (raw === '/api/tech-topics/search' && req.method === 'POST') return json(res, 200, await searchTechTopics());
     if (raw === '/api/wechat/status' && req.method === 'GET') return json(res, 200, await wechatStatus());
+    if (raw === '/api/article-library' && req.method === 'GET') {
+      const query = new URL(req.url || '/', `http://127.0.0.1:${port}`).searchParams.get('q') || '';
+      return json(res, 200, { entries: await listArticleLibrary(storageRoot, query) });
+    }
+    if (raw === '/api/article-library/sync' && req.method === 'POST') {
+      return json(res, 200, await syncWechatDraftLibrary(await readJson(req)));
+    }
+    const articleMatch = raw.match(/^\/api\/article-library\/([a-f0-9]{64})$/i);
+    if (articleMatch && req.method === 'GET') {
+      const entry = await getArticleLibraryEntry(storageRoot, articleMatch[1]);
+      return entry ? json(res, 200, { entry }) : json(res, 404, { error: '本地文章库中没有这条文章' });
+    }
+    if (articleMatch && req.method === 'DELETE') {
+      return json(res, 200, { deleted: await deleteArticleLibraryEntry(storageRoot, articleMatch[1]) });
+    }
     if (raw === '/api/wechat/auth/callback' && req.method === 'GET') {
       return json(res, 200, {
         ok: false,
@@ -225,7 +293,18 @@ const server = http.createServer(async (req, res) => {
       guiPublishInFlight = true;
       try {
         const body = await readJson(req);
-        return json(res, 200, await publishGuiDocument(body.doc, body.confirm === true));
+        const result = await publishGuiDocument(body.doc, body.confirm === true);
+        try {
+          let submittedHtml = '';
+          const generatedRoot = resolve(root, '.local-data', 'gui-publish');
+          const htmlPath = result.htmlPath ? resolve(result.htmlPath) : '';
+          if (htmlPath.startsWith(`${generatedRoot}${sep}`)) submittedHtml = await readFile(htmlPath, 'utf8');
+          result.articleLibrary = await archiveSubmittedArticle(storageRoot, body.doc, result.delivery, new Date().toISOString(), submittedHtml);
+        } catch (error) {
+          // A local archive failure must never turn a confirmed remote submission into a retryable failure.
+          result.articleLibrary = { stored: false, warning: `公众号草稿已提交成功，但本机文章库保存失败：${error.message}` };
+        }
+        return json(res, 200, result);
       } finally {
         guiPublishInFlight = false;
       }

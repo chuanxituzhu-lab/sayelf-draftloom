@@ -11,3 +11,4 @@ coverage/
 .tmp/
 .cache/
 .local-data/
+.codex/config.toml

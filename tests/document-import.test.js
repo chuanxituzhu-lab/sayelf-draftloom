@@ -127,10 +127,51 @@ test('article emphasis detects important and numbered sections and renders a col
   const document = importArticle({ text: '标题\n\n重点：先做最重要的事情\n\n普通正文段落' });
   assert.equal(document.blocks[0].emphasis, 'inline');
   assert.ok(document.blocks[0].emphasisRanges[0].end < document.blocks[0].text.length);
-  assert.equal(document.blocks[1].emphasis, undefined);
+  assert.equal(document.blocks.flatMap(block => block.emphasisRanges || []).filter(range => range.style === 'mark').length, 2);
   assert.match(renderArticleHtml(document), /<span style="background:#fff1cf;color:#303a43/);
   assert.doesNotMatch(renderArticleHtml(document), /<mark\b/);
   assert.doesNotMatch(renderArticleHtml(document), /font-weight:700;color:#17212b;background:#fff7e8/);
+});
+
+test('each ordinary paragraph gets one concise, verbatim core phrase and refreshes after edits', () => {
+  const paragraphs = [
+    '这是一篇普通文章，没有重点等提示词。把稳定的核心观点用在真实场景里，读者才能直接看见最重要的价值。',
+    '企业用自动化工具处理重复任务，能明显提升工作效率。',
+    '当重复流程交给系统后，效能提升让团队专注创造。'
+  ];
+  const initial = applyArticleEmphasis({
+    title: '普通文章',
+    blocks: paragraphs.map((text, index) => ({ id: `body-${index}`, type: 'paragraph', text }))
+  });
+  const highlights = initial.blocks.map(block => {
+    const range = block.emphasisRanges.find(item => item.style === 'mark');
+    assert.ok(range, `missing paragraph highlight for: ${block.text}`);
+    assert.ok(range.end - range.start < block.text.length, 'highlight must not cover the whole paragraph');
+    assert.equal(block.emphasisFallback, true);
+    const phrase = block.text.slice(range.start, range.end);
+    assert.ok(block.text.includes(phrase), 'highlight must be verbatim evidence');
+    return phrase;
+  });
+  assert.ok(highlights[0].includes('核心') || highlights[0].includes('价值'));
+  assert.match(highlights[1], /效率|自动化|重复任务/);
+  assert.match(highlights[2], /效能|创造|流程/);
+
+  const revisedText = '这是一篇修改后的普通文章，没有重点标记。新的核心观点应该重新识别并显示给读者。';
+  const revised = applyArticleEmphasis({ ...initial, blocks: [{ ...initial.blocks[0], text: revisedText }] });
+  const revisedMark = revised.blocks[0].emphasisRanges.find(range => range.style === 'mark');
+  assert.ok(revisedMark);
+  assert.ok(revisedMark.end <= revisedText.length);
+  assert.ok(revisedText.includes(revisedText.slice(revisedMark.start, revisedMark.end)));
+  assert.equal(revised.blocks[0].emphasisFallback, true);
+});
+
+test('quoted golden sentences emphasize a short core phrase instead of coloring the whole quote', () => {
+  const text = '“真正的重点是让复杂表达变得清楚，读者才能迅速抓住核心。”';
+  const document = applyArticleEmphasis({ blocks: [{ id: 'quote', type: 'paragraph', text }] });
+  const range = document.blocks[0].emphasisRanges.find(item => item.style === 'mark');
+  assert.ok(range);
+  assert.ok(range.end - range.start < text.length);
+  assert.ok(text.includes(text.slice(range.start, range.end)));
 });
 
 test('extractLocalDocument extracts text from a local PDF buffer', async () => {

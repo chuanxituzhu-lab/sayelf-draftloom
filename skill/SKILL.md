@@ -3,7 +3,7 @@ name: wechat-layout
 description: Run a local-first Chinese WeChat Official Account publishing workflow with DOCX/PDF text extraction, special-marker cleanup, optional humanization, content distillation, deterministic layout, reference-derived visual systems, WeChat review, explicit draft submission, the document reducer, GUI harness, CLI commands, MCP stdio tools, undo/redo, local image assets, and HTML export. Use when working on 公众号排版、微信文章结构化编辑、内容提炼、去 AI 味、发布审核、图片插入、视觉主题或本地预览。
 ---
 
-# 公众号排版 Skill — v0.5.1
+# 公众号排版 Skill — v0.6.0
 
 ## Purpose
 
@@ -82,6 +82,9 @@ description: Run a local-first Chinese WeChat Official Account publishing workfl
 - GUI 的“自动排版指导”提供“一键生成”：本机完成版式和标题/配图编排后，按微信兼容 HTML 检查字符数与 UTF-8 字节数；本地图片 Data URL 预检时按每张图 480 字符的保守链接空间计量，避免上传后链接长度未知导致临界超限。上传后再用微信返回的真实图片 URL 对同一 HTML 执行最终校验，只有通过才调用草稿接口。确实超限时再蒸馏正文，并同步摘要/封面文案。压缩前原稿受保护，可撤销/恢复；未通过校验时如实报告剩余项，不假报成功。文章默认不发送外部 AI 平台；每条指导仍保留“带入指令”。
 - 微信草稿提交：文章使用的 SVG、WebP、GIF 图片在本机提交前自动转换为 PNG；BMP 等无法转换的格式提前阻止，预览和原始素材不变。审核、检测、导出和提交都不会静默改写正文；“智能优化发布约束”由用户主动触发。
 - GUI 与 CLI 会区分本机连接失败、文档识别失败、微信图片上传失败和草稿接口失败，显示具体处理阶段与下一步，不再只显示 `fetch failed`。
+- 公众号返回有效草稿编号后，服务器将文章快照及实际提交 HTML 追加到 `.local-data/article-library/`；草稿媒体编号相同则幂等跳过，不覆盖用户此前归档。文章库独立于最多 12 条的“文章记录”，支持本机搜索、查看/复制、恢复本机提交文章、删除。
+- “同步历史草稿”仅在用户点击并确认后调用公众号 `draft/batchget`（每页最多 20 篇）；需要时用 `draft/get` 读取详情，分页可继续。同步按媒体编号+图文序号去重，只追加，不更新覆盖；同步内容只用于本机检索/人工选用，不自动发送给 AI。请求仅走微信官方 HTTPS 域名或本机测试回环地址，token 不返回到 WebUI。
+- “3D主题图”按当前选中段落的语义分类，由项目本地 Three.js 渲染，插入段落之后，作为素材库内 PNG 持久化；公众号只接收普通图片，不运行 Three.js。浏览器未开放 WebGL 时给出明确提示，原稿不变。
 - `optimizeWechat()`：按共享微信限制智能蒸馏正文，并同步优化标题、作者、内容摘要、封面主/副文案；预览按“封面 → 标题 → 作者/时间 → 内容摘要 → 正文”动态重排，结果可通过 undo/redo 回滚。
 - `checkWechat()`：一键执行微信字段、正文、封面和排版检查；只返回检查结果，不修改文章。Markdown 清理仅去掉展示用标记，保留 `C#`、`A*`、`2*3` 和 `#话题`。
 - `selectBlock(id)`：GUI 选择块。
